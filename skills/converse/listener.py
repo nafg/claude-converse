@@ -113,6 +113,10 @@ def run():
     except OSError:
         print("Voice mode is already active in another session.", flush=True)
         sys.exit(1)
+    # Write session ID so the status line can identify which session has voice mode
+    session_id = os.environ.get("CLAUDE_SESSION_ID", "")
+    lock_fh.write(session_id)
+    lock_fh.flush()
 
     pa = pyaudio.PyAudio()
 

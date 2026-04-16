@@ -1,6 +1,16 @@
 {
-  "description": "Converse plugin stop hook — speaks Claude's response via TTS",
+  "description": "Converse plugin hooks — session ID export + TTS",
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"export CLAUDE_SESSION_ID=$(jq -r .session_id)\" >> \"$CLAUDE_ENV_FILE\""
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
