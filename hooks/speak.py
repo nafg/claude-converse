@@ -1,0 +1,388 @@
+#!/usr/bin/env python3
+"""
+Speak text via chunked Kokoro TTS.
+
+Can be used as a Claude Code stop hook (reads JSON from stdin, extracts
+last_assistant_message) or directly with plain text (argument or stdin).
+
+Detects JSON automatically — if stdin parses as JSON, extracts the message;
+otherwise treats the input as plain text.
+
+As a stop hook, only activates when the listener is running (voice mode on),
+forks to background so the hook returns immediately, and kills any existing
+TTS before starting (barge-in).
+
+Stores PID in tts.pid so the listener can kill it on barge-in.
+
+Usage:
+    # As stop hook (stdin is JSON from Claude Code):
+    hooks/hooks.json → command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/speak.py"
+
+    # Manual testing:
+    python3 speak.py "Short text to speak"
+    echo "Some **markdown** text" | python3 speak.py
+"""
+
+import hashlib
+import io
+import json
+import os
+import re
+import signal
+import sys
+import time
+import wave
+
+import pyaudio
+import requests
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+KOKORO_URL = os.environ.get("KOKORO_URL", "http://localhost:8880/v1/audio/speech")
+KOKORO_VOICE = os.environ.get("KOKORO_VOICE", "af_heart")
+KOKORO_MODEL = os.environ.get("KOKORO_MODEL", "kokoro")
+
+_DATA_DIR = os.environ.get("CLAUDE_PLUGIN_DATA", os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
+_LOG_FILE = os.path.join(_DATA_DIR, "speak.log")
+
+
+def _log(msg: str):
+    with open(_LOG_FILE, "a") as f:
+        f.write(f"{time.time():.3f} pid={os.getpid()} {msg}\n")
+# PID file must use a stable shared path (not CLAUDE_PLUGIN_DATA, which hooks
+# have but the listener doesn't), so barge-in can find the TTS process.
+_PID_DIR = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+TTS_PID_FILE = os.environ.get("TTS_PID_FILE", os.path.join(_PID_DIR, "tts.pid"))
+TTS_LAST_FILE = os.path.join(_DATA_DIR, "tts_last.txt")
+
+# Pause between chunks (seconds)
+SENTENCE_PAUSE = 0.25
+PARAGRAPH_PAUSE = 0.45
+
+
+# ---------------------------------------------------------------------------
+# PID management (for barge-in)
+# ---------------------------------------------------------------------------
+
+def write_pid():
+    os.makedirs(os.path.dirname(TTS_PID_FILE), exist_ok=True)
+    with open(TTS_PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
+
+
+def remove_pid():
+    try:
+        os.remove(TTS_PID_FILE)
+    except FileNotFoundError:
+        pass
+
+
+def kill_existing_tts():
+    """Kill any existing TTS process (from a previous utterance)."""
+    try:
+        with open(TTS_PID_FILE) as f:
+            pid = int(f.read().strip())
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError, OSError):
+        pass
+
+
+def is_duplicate(text: str) -> bool:
+    """Skip if this is the same text as the last thing spoken."""
+    text_hash = hashlib.md5(text.encode()).hexdigest()
+    try:
+        with open(TTS_LAST_FILE) as f:
+            last_hash = f.read().strip()
+            if last_hash == text_hash:
+                return True
+    except (FileNotFoundError, ValueError):
+        pass
+    # Write current hash
+    os.makedirs(os.path.dirname(TTS_LAST_FILE), exist_ok=True)
+    with open(TTS_LAST_FILE, "w") as f:
+        f.write(text_hash)
+    return False
+
+
+# ---------------------------------------------------------------------------
+# Markdown stripping
+# ---------------------------------------------------------------------------
+
+def strip_markdown(text: str) -> str:
+    """Remove markdown formatting, keeping the readable text."""
+    # Code blocks → brief note
+    text = re.sub(r"```[\s\S]*?```", " (code omitted) ", text)
+    # Inline code → just the text
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    # Bold/italic
+    text = re.sub(r"\*{1,3}(.+?)\*{1,3}", r"\1", text)
+    text = re.sub(r"_{1,3}(.+?)_{1,3}", r"\1", text)
+    # Headers → just the text
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+    # Links → just the label
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    # Horizontal rules
+    text = re.sub(r"^[-*_]{3,}\s*$", "", text, flags=re.MULTILINE)
+    # HTML tags
+    text = re.sub(r"<[^>]+>", "", text)
+    # Bullet markers (but keep the text)
+    text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.MULTILINE)
+    # Numbered list markers
+    text = re.sub(r"^\s*\d+\.\s+", "", text, flags=re.MULTILINE)
+    return text.strip()
+
+
+# ---------------------------------------------------------------------------
+# Text → chunks
+# ---------------------------------------------------------------------------
+
+# Common abbreviations that shouldn't end a sentence
+ABBREVS = re.compile(
+    r"\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|vs|etc|approx|dept|est|govt"
+    r"|e\.g|i\.e|a\.m|p\.m|U\.S|Inc|Ltd|Co|Corp|Gen|Gov|Sgt|Pvt"
+    r"|Capt|Lt|Cmdr|Adm|Rev|Hon|Pres|Vol|No)\.$",
+    re.IGNORECASE,
+)
+
+
+def split_into_chunks(text: str) -> list[dict]:
+    """
+    Split text into speech chunks with pause metadata.
+
+    Returns list of {"text": str, "pause": float} dicts.
+    """
+    if not text:
+        return []
+
+    chunks = []
+
+    # Split on paragraph boundaries first (before stripping markdown,
+    # so we can detect list structure)
+    paragraphs = re.split(r"\n\n+", text)
+
+    for para_idx, para in enumerate(paragraphs):
+        para = para.strip()
+        if not para:
+            continue
+
+        # Check if this paragraph contains a list
+        lines = para.split("\n")
+        is_list = any(re.match(r"\s*[-*+]\s|^\s*\d+\.\s", ln) for ln in lines)
+
+        if is_list:
+            # Each line becomes its own chunk (after markdown stripping)
+            for line in lines:
+                clean = strip_markdown(line).strip()
+                if clean:
+                    chunks.append({"text": clean, "pause": SENTENCE_PAUSE})
+        else:
+            # Regular paragraph: join lines, split into sentences
+            clean = strip_markdown(para)
+            lines_clean = [ln.strip() for ln in clean.split("\n") if ln.strip()]
+            full_text = " ".join(lines_clean)
+
+            sentences = _split_sentences(full_text)
+            for sent in sentences:
+                sent = sent.strip()
+                if sent:
+                    chunks.append({"text": sent, "pause": SENTENCE_PAUSE})
+
+        # Bigger pause between paragraphs
+        if chunks and para_idx < len(paragraphs) - 1:
+            chunks[-1]["pause"] = PARAGRAPH_PAUSE
+
+    # No trailing pause on the last chunk
+    if chunks:
+        chunks[-1]["pause"] = 0
+
+    return chunks
+
+
+def _split_sentences(text: str) -> list[str]:
+    """Split text into sentences, handling common abbreviations."""
+    sentences = []
+    current = []
+
+    # Tokenize by spaces to check abbreviations
+    words = text.split()
+
+    for word in words:
+        current.append(word)
+
+        # Check if this word ends with sentence-ending punctuation
+        if re.search(r"[.!?]$", word):
+            # But not if it's a known abbreviation
+            joined = " ".join(current)
+            if ABBREVS.search(joined):
+                continue  # Not a real sentence end
+
+            # Check for single-letter abbreviation (like "U." in "U.S.")
+            if re.match(r"^[A-Z]\.$", word):
+                continue
+
+            sentences.append(joined)
+            current = []
+
+    # Remaining text becomes its own chunk
+    if current:
+        sentences.append(" ".join(current))
+
+    return sentences
+
+
+# ---------------------------------------------------------------------------
+# TTS synthesis + playback
+# ---------------------------------------------------------------------------
+
+def synthesize(text: str) -> bytes:
+    """Call Kokoro and return WAV bytes."""
+    resp = requests.post(
+        KOKORO_URL,
+        json={
+            "model": KOKORO_MODEL,
+            "input": text,
+            "voice": KOKORO_VOICE,
+            "response_format": "wav",
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.content
+
+
+def play_wav(wav_bytes: bytes):
+    """Play WAV audio via pyaudio (blocking, no temp files)."""
+    buf = io.BytesIO(wav_bytes)
+    with wave.open(buf, "rb") as wf:
+        pa = pyaudio.PyAudio()
+        try:
+            stream = pa.open(
+                format=pa.get_format_from_width(wf.getsampwidth()),
+                channels=wf.getnchannels(),
+                rate=wf.getframerate(),
+                output=True,
+            )
+            chunk_size = 1024
+            data = wf.readframes(chunk_size)
+            while data:
+                stream.write(data)
+                data = wf.readframes(chunk_size)
+            stream.stop_stream()
+            stream.close()
+        finally:
+            pa.terminate()
+
+
+# ---------------------------------------------------------------------------
+# Core speak function
+# ---------------------------------------------------------------------------
+
+def speak(text: str):
+    """Render text to speech chunks and play them."""
+    # Own process group so barge-in can kill the whole tree
+    try:
+        os.setpgrp()
+    except OSError:
+        pass
+
+    write_pid()
+
+    try:
+        chunks = split_into_chunks(text)
+
+        for chunk in chunks:
+            wav = synthesize(chunk["text"])
+            play_wav(wav)
+            if chunk["pause"] > 0:
+                time.sleep(chunk["pause"])
+
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    except requests.RequestException as e:
+        print(f"TTS error: {e}", file=sys.stderr)
+    finally:
+        remove_pid()
+
+
+# ---------------------------------------------------------------------------
+# Input handling
+# ---------------------------------------------------------------------------
+
+def strip_echo_prefix(text: str) -> str:
+    """Strip the transcription echo (everything before ---) so we only speak the response."""
+    if "\n---\n" in text:
+        return text.split("\n---\n", 1)[1]
+    # Also handle --- at the very start of a line
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        if line.strip() == "---":
+            return "\n".join(lines[i + 1:])
+    return text
+
+
+def extract_text(raw: str) -> str | None:
+    """
+    Extract speakable text from input.
+
+    Tries to parse as JSON (stop hook mode) — if that works, extracts
+    last_assistant_message. Otherwise treats input as plain text.
+
+    Returns None if there's nothing to speak.
+    """
+    text = None
+
+    # Try JSON first (stop hook mode)
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            text = data.get("last_assistant_message", "")
+    except (json.JSONDecodeError, TypeError):
+        # Not JSON — treat as plain text
+        text = raw
+
+    if not text or not text.strip():
+        return None
+
+    return strip_echo_prefix(text).strip() or None
+
+
+def main():
+    # If arguments given, speak them directly (manual testing)
+    if len(sys.argv) > 1:
+        speak(" ".join(sys.argv[1:]))
+        return
+
+    raw = sys.stdin.read()
+    if not raw.strip():
+        return
+
+    text = extract_text(raw)
+    if not text:
+        return
+
+    # If input was JSON (stop hook mode), check if voice mode is on
+    # and fork to background
+    is_hook = False
+    try:
+        data = json.loads(raw)
+        is_hook = isinstance(data, dict)
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    if is_hook:
+        if is_duplicate(text):
+            _log("skipping duplicate")
+            return
+
+        _log(f"speaking: {text[:80]!r}")
+        kill_existing_tts()
+        speak(text)
+    else:
+        # Direct invocation
+        speak(text)
+
+
+if __name__ == "__main__":
+    main()

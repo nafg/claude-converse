@@ -1,0 +1,16 @@
+{
+  "description": "Converse plugin stop hook — speaks Claude's response via TTS",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/speak.py",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}
