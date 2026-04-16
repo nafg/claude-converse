@@ -46,6 +46,8 @@ TTS_PID_FILE = os.environ.get("TTS_PID_FILE", os.path.join(_DATA_DIR, "tts.pid")
 
 _PID_DIR = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
 LOCK_FILE = os.path.join(_PID_DIR, "claude-converse.lock")
+RECENT_FILE = os.path.join(_PID_DIR, "claude-converse-recent.txt")
+RECENT_MAX_LINES = 3
 
 
 LOG_FILE = os.environ.get("LISTENER_LOG", os.path.join(_DATA_DIR, "listener.log"))
@@ -204,12 +206,30 @@ def run():
         log("[listener] stopped")
 
 
+def _update_recent(text: str):
+    """Keep last N transcriptions in a file for the status line."""
+    try:
+        lines = []
+        try:
+            with open(RECENT_FILE) as f:
+                lines = f.read().strip().splitlines()
+        except FileNotFoundError:
+            pass
+        lines.append(text)
+        lines = lines[-RECENT_MAX_LINES:]
+        with open(RECENT_FILE, "w") as f:
+            f.write("\n".join(lines) + "\n")
+    except Exception as e:
+        log(f"[recent] write failed: {e}")
+
+
 def _transcribe_and_emit(audio_data: bytes):
     text = transcribe(audio_data)
     if text:
         # This is the key line: stdout goes to Monitor → Claude sees it
         print(text, flush=True)
         log(f"[transcription] {text}")
+        _update_recent(text)
 
 
 if __name__ == "__main__":
