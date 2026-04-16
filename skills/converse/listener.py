@@ -10,6 +10,7 @@ stdout format: one line per transcription (Monitor delivers each line as a notif
 stderr: logging (goes to Monitor's output file, not to Claude).
 """
 
+import fcntl
 import io
 import os
 import signal
@@ -42,6 +43,9 @@ MIN_UTTERANCE_FRAMES = 10        # ~300ms minimum to transcribe
 WHISPER_URL = os.environ.get("WHISPER_URL", "http://localhost:2022/v1/audio/transcriptions")
 _DATA_DIR = os.environ.get("CLAUDE_PLUGIN_DATA", os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
 TTS_PID_FILE = os.environ.get("TTS_PID_FILE", os.path.join(_DATA_DIR, "tts.pid"))
+
+_PID_DIR = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+LOCK_FILE = os.path.join(_PID_DIR, "converse.lock")
 
 
 LOG_FILE = os.environ.get("LISTENER_LOG", os.path.join(_DATA_DIR, "listener.log"))
@@ -102,6 +106,14 @@ def transcribe(audio_bytes: bytes) -> str:
 # ---------------------------------------------------------------------------
 
 def run():
+    # Acquire exclusive lock — only one voice session at a time
+    lock_fh = open(LOCK_FILE, "w")
+    try:
+        fcntl.flock(lock_fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("Voice mode is already active in another session.", flush=True)
+        sys.exit(1)
+
     pa = pyaudio.PyAudio()
 
     try:
