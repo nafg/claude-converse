@@ -45,7 +45,7 @@ _DATA_DIR = os.environ.get("CLAUDE_PLUGIN_DATA", os.environ.get("XDG_RUNTIME_DIR
 TTS_PID_FILE = os.environ.get("TTS_PID_FILE", os.path.join(_DATA_DIR, "tts.pid"))
 
 _PID_DIR = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
-LOCK_FILE = os.path.join(_PID_DIR, "converse.lock")
+LOCK_FILE = os.path.join(_PID_DIR, "claude-converse.lock")
 
 
 LOG_FILE = os.environ.get("LISTENER_LOG", os.path.join(_DATA_DIR, "listener.log"))

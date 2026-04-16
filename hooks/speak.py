@@ -23,6 +23,7 @@ Usage:
     echo "Some **markdown** text" | python3 speak.py
 """
 
+import fcntl
 import hashlib
 import io
 import json
@@ -56,6 +57,7 @@ def _log(msg: str):
 _PID_DIR = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
 TTS_PID_FILE = os.environ.get("TTS_PID_FILE", os.path.join(_PID_DIR, "tts.pid"))
 TTS_LAST_FILE = os.path.join(_DATA_DIR, "tts_last.txt")
+LOCK_FILE = os.path.join(_PID_DIR, "claude-converse.lock")
 
 # Pause between chunks (seconds)
 SENTENCE_PAUSE = 0.25
@@ -87,6 +89,26 @@ def kill_existing_tts():
         os.killpg(os.getpgid(pid), signal.SIGTERM)
     except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError, OSError):
         pass
+
+
+def is_voice_session(hook_session_id: str) -> bool:
+    """Check if voice mode is active for this session."""
+    try:
+        with open(LOCK_FILE) as f:
+            # Try non-blocking lock — if we get it, nobody holds it (voice off)
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(f, fcntl.LOCK_UN)
+            return False
+    except OSError:
+        # Lock is held — voice mode is on. Check session ID.
+        try:
+            with open(LOCK_FILE) as f:
+                lock_session_id = f.read().strip()
+            return lock_session_id == hook_session_id
+        except (FileNotFoundError, ValueError):
+            return False
+    except FileNotFoundError:
+        return False
 
 
 def is_duplicate(text: str) -> bool:
@@ -372,6 +394,10 @@ def main():
         pass
 
     if is_hook:
+        hook_session_id = data.get("session_id", "") if data else ""
+        if not is_voice_session(hook_session_id):
+            return
+
         if is_duplicate(text):
             _log("skipping duplicate")
             return
