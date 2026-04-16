@@ -39,10 +39,16 @@ Toggle the voice loop on or off. When on, Claude listens continuously via Monito
 2. **Resume normal text mode**: Stop using the voice protocol (no blockquote echo, no delimiter, normal response length)
 3. Confirm voice mode is off
 
+## Troubleshooting
+
+   - **Whisper hallucination**: If you notice repeated identical transcriptions (e.g. every event is "Hello" or the same phrase), Whisper has likely gone stale. Run `voicemode service restart whisper` to fix it, then inform the user.
+   - **TTS not responding**: If responses aren't being spoken, run `voicemode service restart kokoro`.
+
 ## Notes
 
+- Requires `voicemode` for Whisper STT and Kokoro TTS services
 - The Stop hook handles TTS output automatically
 - Barge-in works by killing the TTS process group via PID file
 - The listener uses energy-based VAD with a 300ms pre-buffer
-- Whisper STT runs locally at localhost:2022
-- Kokoro TTS runs locally at localhost:8880
+- Whisper STT runs locally at localhost:2022 (`voicemode service restart whisper` to fix)
+- Kokoro TTS runs locally at localhost:8880 (`voicemode service restart kokoro` to fix)
