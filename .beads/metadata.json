@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "claude_converse",
+  "project_id": "ca73dffc-65b2-482c-ae1d-dcf273b0010e"
+}

@@ -4,3 +4,8 @@ __pycache__/
 *.mp3
 *.log
 tts.pid
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key

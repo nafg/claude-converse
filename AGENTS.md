@@ -1,36 +1,40 @@
-# Converse
+# Agent Instructions
 
-Non-blocking, interruptible voice interface for Claude Code.
+This project uses **bd** (beads) for issue tracking. Run `bd prime` for full workflow context.
 
-## Plugin Structure
+## Quick Reference
 
+```bash
+bd ready              # Find available work
+bd show <id>          # View issue details
+bd update <id> --claim  # Claim work atomically
+bd close <id>         # Complete work
+bd dolt push          # Push beads data to remote
 ```
-.claude-plugin/plugin.json   — Plugin manifest
-skills/converse/SKILL.md     — /converse skill (toggle voice mode)
-skills/converse/listener.py  — Mic → energy VAD → Whisper STT → stdout
-hooks/hooks.json             — Stop hook config
-hooks/speak.py               — TTS via Kokoro + stop hook (JSON or plain text)
+
+## Non-Interactive Shell Commands
+
+**ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.
+
+Shell commands like `cp`, `mv`, and `rm` may be aliased to include `-i` (interactive) mode on some systems, causing the agent to hang indefinitely waiting for y/n input.
+
+**Use these forms instead:**
+```bash
+# Force overwrite without prompting
+cp -f source dest           # NOT: cp source dest
+mv -f source dest           # NOT: mv source dest
+rm -f file                  # NOT: rm file
+
+# For recursive operations
+rm -rf directory            # NOT: rm -r directory
+cp -rf source dest          # NOT: cp -r source dest
 ```
 
-## Services
-
-- Kokoro TTS: `http://localhost:8880/v1/audio/speech` (OpenAI-compatible)
-- Whisper STT: `http://localhost:2022/v1/audio/transcriptions` (whisper.cpp)
-
-## How it works
-
-1. `/converse` starts listener via Monitor (persistent)
-2. User speaks → listener kills any TTS (barge-in) → transcribes → stdout → Monitor delivers to Claude
-3. Claude responds → Stop hook fires (async) → speak.py reads JSON, extracts message, plays TTS
-4. Loop back to 2
-
-## Key details
-
-- speak.py auto-detects JSON (hook mode) vs plain text (manual mode)
-- In hook mode: kills existing TTS, runs async (configured in hooks.json)
-- PID file and logs stored in $CLAUDE_PLUGIN_DATA (or $XDG_RUNTIME_DIR, or /tmp)
-- All paths configurable via environment variables
-
+**Other commands that may prompt:**
+- `scp` - use `-o BatchMode=yes` for non-interactive
+- `ssh` - use `-o BatchMode=yes` to fail instead of prompting
+- `apt-get` - use `-y` flag
+- `brew` - use `HOMEBREW_NO_AUTO_UPDATE=1` env var
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
 ## Beads Issue Tracker
