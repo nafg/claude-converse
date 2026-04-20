@@ -1,16 +1,6 @@
 {
   "description": "Converse plugin hooks — session ID injection + TTS",
   "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/export-session-id.sh"
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "",

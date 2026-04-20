@@ -12,8 +12,6 @@ hooks/hooks.json                — Hook registrations
 hooks/speak.py                  — TTS via Kokoro + Stop hook
 hooks/inject-session-id.py      — PreToolUse hook: injects authoritative
                                    session_id into the listener's env
-hooks/export-session-id.sh      — SessionStart hook: publishes
-                                   CLAUDE_SESSION_ID via CLAUDE_ENV_FILE
 ```
 
 ## Services
