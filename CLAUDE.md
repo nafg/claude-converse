@@ -41,6 +41,22 @@ exec "$SERVER_BIN" \
 Then `voicemode service restart whisper`. The flag only disables cross-request
 context; within a single request, multi-window (30 s+) utterances still flow.
 
+## Statusline integration
+
+`skills/converse/render_status.py` produces the voice line. It only renders
+for the session that actually owns voice mode — comparing `CLAUDE_SESSION_ID`
+to the lock file's content. Pipe Claude Code's statusline JSON payload into
+it (it contains `session_id`), or pass `--session-id` explicitly:
+
+```sh
+voice=$(printf '%s' "$INPUT_JSON" | render_status.py)
+[ -n "$voice" ] && echo "$voice"
+```
+
+When voice mode is on for the current session but no transcription has
+arrived inside the window, `render_status.py` still emits the prefix (mic
+emoji) on its own — a small persistent indicator that voice is active.
+
 ## How it works
 
 1. `/converse` starts listener via Monitor (persistent)
