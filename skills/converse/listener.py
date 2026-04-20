@@ -81,6 +81,7 @@ PRE_BUFFER_FRAMES = _int_env("VAD_PRE_BUFFER_FRAMES", 10)          # ~300ms
 # ---------------------------------------------------------------------------
 
 WHISPER_URL = os.environ.get("WHISPER_URL", "http://localhost:2022/v1/audio/transcriptions")
+WHISPER_INITIAL_PROMPT = os.environ.get("WHISPER_INITIAL_PROMPT", "")
 _DATA_DIR = os.environ.get("CLAUDE_PLUGIN_DATA", os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
 TTS_PID_FILE = os.environ.get("TTS_PID_FILE", os.path.join(_DATA_DIR, "tts.pid"))
 
@@ -130,11 +131,15 @@ def transcribe(audio_bytes: bytes) -> str:
         wf.writeframes(audio_bytes)
     buf.seek(0)
 
+    data = {"model": "base", "response_format": "json", "language": "en"}
+    if WHISPER_INITIAL_PROMPT:
+        data["prompt"] = WHISPER_INITIAL_PROMPT
+
     try:
         resp = requests.post(
             WHISPER_URL,
             files={"file": ("audio.wav", buf, "audio/wav")},
-            data={"model": "base", "response_format": "json", "language": "en"},
+            data=data,
             timeout=30,
         )
         resp.raise_for_status()
