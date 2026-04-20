@@ -12,7 +12,7 @@
       "name": "converse",
       "source": "./",
       "description": "Non-blocking, interruptible voice interface for Claude Code with Whisper STT and Kokoro TTS",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "repository": "https://github.com/nafg/claude-converse",
       "author": {
         "name": "Naftoli Gugenheim"
