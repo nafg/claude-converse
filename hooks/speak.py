@@ -334,6 +334,8 @@ def speak(text: str):
         pass
     except requests.RequestException as e:
         print(f"TTS error: {e}", file=sys.stderr)
+    except OSError as e:
+        print(f"Audio playback error: {e}", file=sys.stderr)
     finally:
         remove_pid()
 
