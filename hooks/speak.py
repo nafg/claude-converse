@@ -274,27 +274,32 @@ def synthesize(text: str) -> bytes:
     return resp.content
 
 
-def play_wav(wav_bytes: bytes):
+def get_default_output_device_index(pa: pyaudio.PyAudio) -> int | None:
+    """Index of the default output device, or None if unavailable."""
+    try:
+        return int(pa.get_default_output_device_info()["index"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def play_wav(wav_bytes: bytes, pa: pyaudio.PyAudio, output_device_index: int | None = None):
     """Play WAV audio via pyaudio (blocking, no temp files)."""
     buf = io.BytesIO(wav_bytes)
     with wave.open(buf, "rb") as wf:
-        pa = pyaudio.PyAudio()
-        try:
-            stream = pa.open(
-                format=pa.get_format_from_width(wf.getsampwidth()),
-                channels=wf.getnchannels(),
-                rate=wf.getframerate(),
-                output=True,
-            )
-            chunk_size = 1024
+        stream = pa.open(
+            format=pa.get_format_from_width(wf.getsampwidth()),
+            channels=wf.getnchannels(),
+            rate=wf.getframerate(),
+            output=True,
+            output_device_index=output_device_index,
+        )
+        chunk_size = 1024
+        data = wf.readframes(chunk_size)
+        while data:
+            stream.write(data)
             data = wf.readframes(chunk_size)
-            while data:
-                stream.write(data)
-                data = wf.readframes(chunk_size)
-            stream.stop_stream()
-            stream.close()
-        finally:
-            pa.terminate()
+        stream.stop_stream()
+        stream.close()
 
 
 # ---------------------------------------------------------------------------
@@ -313,12 +318,17 @@ def speak(text: str):
 
     try:
         chunks = split_into_chunks(text)
+        pa = pyaudio.PyAudio()
+        try:
+            output_device_index = get_default_output_device_index(pa)
 
-        for chunk in chunks:
-            wav = synthesize(chunk["text"])
-            play_wav(wav)
-            if chunk["pause"] > 0:
-                time.sleep(chunk["pause"])
+            for chunk in chunks:
+                wav = synthesize(chunk["text"])
+                play_wav(wav, pa, output_device_index=output_device_index)
+                if chunk["pause"] > 0:
+                    time.sleep(chunk["pause"])
+        finally:
+            pa.terminate()
 
     except (KeyboardInterrupt, SystemExit):
         pass
