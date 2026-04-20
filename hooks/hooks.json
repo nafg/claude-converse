@@ -1,5 +1,5 @@
 {
-  "description": "Converse plugin hooks — session ID export + TTS",
+  "description": "Converse plugin hooks — session ID injection + TTS",
   "hooks": {
     "SessionStart": [
       {
@@ -7,6 +7,17 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/export-session-id.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/inject-session-id.py"
           }
         ]
       }

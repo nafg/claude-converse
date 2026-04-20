@@ -5,11 +5,15 @@ Non-blocking, interruptible voice interface for Claude Code.
 ## Plugin Structure
 
 ```
-.claude-plugin/plugin.json   — Plugin manifest
-skills/converse/SKILL.md     — /converse skill (toggle voice mode)
-skills/converse/listener.py  — Mic → energy VAD → Whisper STT → stdout
-hooks/hooks.json             — Stop hook config
-hooks/speak.py               — TTS via Kokoro + stop hook (JSON or plain text)
+.claude-plugin/plugin.json      — Plugin manifest
+skills/converse/SKILL.md        — /converse skill (toggle voice mode)
+skills/converse/listener.py     — Mic → energy VAD → Whisper STT → stdout
+hooks/hooks.json                — Hook registrations
+hooks/speak.py                  — TTS via Kokoro + Stop hook
+hooks/inject-session-id.py      — PreToolUse hook: injects authoritative
+                                   session_id into the listener's env
+hooks/export-session-id.sh      — SessionStart hook: publishes
+                                   CLAUDE_SESSION_ID via CLAUDE_ENV_FILE
 ```
 
 ## Services
