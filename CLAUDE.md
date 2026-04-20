@@ -17,6 +17,28 @@ hooks/speak.py               — TTS via Kokoro + stop hook (JSON or plain text)
 - Kokoro TTS: `http://localhost:8880/v1/audio/speech` (OpenAI-compatible)
 - Whisper STT: `http://localhost:2022/v1/audio/transcriptions` (whisper.cpp)
 
+### Whisper setup requirement
+
+whisper-server must be started with `--no-context`. Without it, the decoder's
+`prompt_past` token buffer persists across HTTP requests, so a single bad
+transcription contaminates every subsequent one until the server is restarted.
+
+voicemode's default startup omits the flag. Add it to
+`~/.voicemode/services/whisper/bin/start-whisper-server.sh`:
+
+```
+exec "$SERVER_BIN" \
+    --host 0.0.0.0 \
+    --port "$WHISPER_PORT" \
+    --model "$MODEL_PATH" \
+    --inference-path /v1/audio/transcriptions \
+    --threads 8 \
+    --no-context
+```
+
+Then `voicemode service restart whisper`. The flag only disables cross-request
+context; within a single request, multi-window (30 s+) utterances still flow.
+
 ## How it works
 
 1. `/converse` starts listener via Monitor (persistent)

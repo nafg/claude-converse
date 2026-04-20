@@ -41,7 +41,7 @@ Toggle the voice loop on or off. When on, Claude listens continuously via Monito
 
 ## Troubleshooting
 
-   - **Whisper hallucination**: If you notice repeated identical transcriptions (e.g. every event is "Hello" or the same phrase), Whisper has likely gone stale. Run `voicemode service restart whisper` to fix it, then inform the user.
+   - **Whisper hallucination**: Previous-request tokens leaking across utterances is prevented by running whisper-server with `--no-context` (see CLAUDE.md setup notes). If you still see cascading repeated transcriptions, `voicemode service restart whisper` clears the state as a fallback.
    - **TTS not responding**: If responses aren't being spoken, run `voicemode service restart kokoro`.
 
 ## Notes
