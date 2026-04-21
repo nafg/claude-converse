@@ -356,30 +356,21 @@ def strip_echo_prefix(text: str) -> str:
     return text
 
 
-def extract_text(raw: str) -> str | None:
-    """
-    Extract speakable text from input.
+def extract_text(raw: str, payload: dict | None) -> str | None:
+    """Speakable text from stdin. Hook mode (payload is a dict) pulls
+    last_assistant_message; otherwise raw is treated as plain text."""
+    source = payload.get("last_assistant_message", "") if payload else raw
+    if not source or not source.strip():
+        return None
+    return strip_echo_prefix(source).strip() or None
 
-    Tries to parse as JSON (stop hook mode) — if that works, extracts
-    last_assistant_message. Otherwise treats input as plain text.
 
-    Returns None if there's nothing to speak.
-    """
-    text = None
-
-    # Try JSON first (stop hook mode)
+def _parse_hook_payload(raw: str) -> dict | None:
     try:
         data = json.loads(raw)
-        if isinstance(data, dict):
-            text = data.get("last_assistant_message", "")
     except (json.JSONDecodeError, TypeError):
-        # Not JSON — treat as plain text
-        text = raw
-
-    if not text or not text.strip():
         return None
-
-    return strip_echo_prefix(text).strip() or None
+    return data if isinstance(data, dict) else None
 
 
 def main():
@@ -392,34 +383,21 @@ def main():
     if not raw.strip():
         return
 
-    text = extract_text(raw)
+    payload = _parse_hook_payload(raw)
+    text = extract_text(raw, payload)
     if not text:
         return
 
-    # If input was JSON (stop hook mode), check if voice mode is on
-    # and fork to background
-    is_hook = False
-    try:
-        data = json.loads(raw)
-        is_hook = isinstance(data, dict)
-    except (json.JSONDecodeError, TypeError):
-        pass
-
-    if is_hook:
-        hook_session_id = data.get("session_id", "") if data else ""
-        if not is_voice_session(hook_session_id):
+    if payload is not None:
+        if not is_voice_session(payload.get("session_id", "")):
             return
-
         if is_duplicate(text):
             _log("skipping duplicate")
             return
-
         _log(f"speaking: {text[:80]!r}")
         kill_existing_tts()
-        speak(text)
-    else:
-        # Direct invocation
-        speak(text)
+
+    speak(text)
 
 
 if __name__ == "__main__":
