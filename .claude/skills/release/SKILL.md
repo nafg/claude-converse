@@ -46,13 +46,26 @@ Follow semver loosely:
    git push
    ```
 
-3. **Tag the bump commit, push the tag, create the GitHub release with auto-generated notes.**
+3. **Tag the bump commit and push the tag.**
    ```bash
    git tag -a vX.Y.Z -m "vX.Y.Z"
    git push origin vX.Y.Z
-   gh release create vX.Y.Z --title "vX.Y.Z" --generate-notes --notes-start-tag vPREV
    ```
-   `--generate-notes` pulls commit messages between `--notes-start-tag` and the new tag; review the output and edit if a bullet is confusing out of context.
+
+4. **Write release notes by hand from the commit log.** Do **not** use `--generate-notes` — this repo has no PR workflow, so GitHub's auto-generation produces empty/useless output. Read the actual commits:
+   ```bash
+   git --no-pager log --oneline vPREV..vX.Y.Z
+   ```
+   Group commits by theme (features / fixes / internals) if there are more than a few. Cite each commit's short sha in parentheses so readers can trace back. Then:
+   ```bash
+   gh release create vX.Y.Z --title "vX.Y.Z" --notes "$(cat <<'EOF'
+   ## Theme
+
+   - Bullet referencing (abc1234)
+   EOF
+   )"
+   ```
+   Or `--notes-file path.md` if the notes are long.
 
 ## Verification
 
