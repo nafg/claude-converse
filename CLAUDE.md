@@ -43,19 +43,31 @@ context; within a single request, multi-window (30 s+) utterances still flow.
 
 ## Statusline integration
 
-`skills/converse/render_status.py` produces the voice line. It only renders
-for the session that actually owns voice mode — comparing `CLAUDE_SESSION_ID`
-to the lock file's content. Pipe Claude Code's statusline JSON payload into
-it (it contains `session_id`), or pass `--session-id` explicitly:
+The plugin owns everything voice-related — lock-file gate, session-id check,
+render, color/dim styling. The user's statusline only needs to find the
+plugin's wrapper script (`skills/converse/statusline-line.sh`) and pipe
+Claude Code's statusline JSON payload through it.
 
-```sh
-voice=$(printf '%s' "$INPUT_JSON" | render_status.py)
-[ -n "$voice" ] && echo "$voice"
+One-liner for fish:
+
+```fish
+echo $session_json | eval (ls -dv ~/.claude/plugins/cache/claude-converse/converse/*/skills/converse/statusline-line.sh 2>/dev/null | tail -1)
 ```
 
-When voice mode is on for the current session but no transcription has
-arrived inside the window, `render_status.py` still emits the prefix (mic
-emoji) on its own — a small persistent indicator that voice is active.
+Bash equivalent:
+
+```bash
+printf '%s' "$INPUT_JSON" | "$(ls -dv ~/.claude/plugins/cache/claude-converse/converse/*/skills/converse/statusline-line.sh 2>/dev/null | tail -1)"
+```
+
+The wrapper prints nothing when voice mode is off, when a different session
+owns voice mode, or there's nothing to show. When voice mode is on for the
+current session but the user is silent, it still prints just the mic emoji
+as a persistent "voice active" indicator.
+
+The underlying `render_status.py` is callable directly too (see its
+`--session-id` flag) — useful if your statusline can't easily forward
+stdin.
 
 ## How it works
 
