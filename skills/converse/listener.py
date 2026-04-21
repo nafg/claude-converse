@@ -83,9 +83,12 @@ PRE_BUFFER_FRAMES = _int_env("VAD_PRE_BUFFER_FRAMES", 10)          # ~300ms
 WHISPER_URL = os.environ.get("WHISPER_URL", "http://localhost:2022/v1/audio/transcriptions")
 WHISPER_INITIAL_PROMPT = os.environ.get("WHISPER_INITIAL_PROMPT", "")
 _DATA_DIR = os.environ.get("CLAUDE_PLUGIN_DATA", os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
-TTS_PID_FILE = os.environ.get("TTS_PID_FILE", os.path.join(_DATA_DIR, "tts.pid"))
 
+# PID_DIR is the stable cross-process path — speak.py writes TTS_PID_FILE
+# here, so the listener must read from the same location regardless of
+# CLAUDE_PLUGIN_DATA (hooks have it, the listener doesn't).
 _PID_DIR = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+TTS_PID_FILE = os.environ.get("TTS_PID_FILE", os.path.join(_PID_DIR, "tts.pid"))
 LOCK_FILE = os.path.join(_PID_DIR, "claude-converse.lock")
 RECENT_FILE = os.path.join(_PID_DIR, "claude-converse-recent.jsonl")
 # The render routine filters by age, so we just need a reasonable cap on rows.
