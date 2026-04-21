@@ -16,7 +16,7 @@ Stores PID in tts.pid so the listener can kill it on barge-in.
 
 Usage:
     # As stop hook (stdin is JSON from Claude Code):
-    hooks/hooks.json → command: "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/speak.py"
+    hooks/hooks.json → command: "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/speak.py"
 
     # Manual testing:
     python3 speak.py "Short text to speak"
