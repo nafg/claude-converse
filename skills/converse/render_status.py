@@ -39,32 +39,28 @@ def _default_lock_file() -> str:
     return os.path.join(pid_dir, "claude-converse.lock")
 
 
-def _voice_mode_active(lock_file: str) -> bool:
-    """Lock is held exclusively by the listener. If we can acquire it
-    non-blocking, no listener is running."""
+def _voice_owner_session_id(lock_file: str) -> str | None:
+    """None if voice mode is inactive (nobody holds the listener lock).
+    Otherwise the session_id written to the lock file by listener.py
+    (empty string if unreadable). One open() covers both the liveness
+    probe and the id read."""
     try:
-        fh = open(lock_file, "a+")
+        fh = open(lock_file)
     except OSError:
-        return False
+        return None
     try:
-        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        return True
-    else:
-        fcntl.flock(fh, fcntl.LOCK_UN)
-        return False
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            try:
+                return fh.read().strip()
+            except (OSError, ValueError):
+                return ""
+        else:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+            return None
     finally:
         fh.close()
-
-
-def _voice_session_id(lock_file: str) -> str:
-    """The session_id of the session that owns voice mode (written to the
-    lock file by listener.py). Empty string if unreadable."""
-    try:
-        with open(lock_file) as f:
-            return f.read().strip()
-    except (OSError, ValueError):
-        return ""
 
 
 def _session_id_from_stdin() -> str:
@@ -124,10 +120,9 @@ def render(
     lock_file: str,
     current_session_id: str,
 ) -> str:
-    if not _voice_mode_active(lock_file):
+    owner = _voice_owner_session_id(lock_file)
+    if owner is None:
         return ""
-
-    owner = _voice_session_id(lock_file)
     if not current_session_id or owner != current_session_id:
         return ""
 
