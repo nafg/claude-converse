@@ -111,21 +111,21 @@ def is_voice_session(hook_session_id: str) -> bool:
         return False
 
 
-def is_duplicate(text: str) -> bool:
-    """Skip if this is the same text as the last thing spoken."""
+def mark_if_new(text: str) -> bool:
+    """True if this text differs from the last thing we spoke (and updates
+    the stored hash so the next call sees it as the last). False means
+    caller should skip as a duplicate."""
     text_hash = hashlib.md5(text.encode()).hexdigest()
     try:
         with open(TTS_LAST_FILE) as f:
-            last_hash = f.read().strip()
-            if last_hash == text_hash:
-                return True
+            if f.read().strip() == text_hash:
+                return False
     except (FileNotFoundError, ValueError):
         pass
-    # Write current hash
     os.makedirs(os.path.dirname(TTS_LAST_FILE), exist_ok=True)
     with open(TTS_LAST_FILE, "w") as f:
         f.write(text_hash)
-    return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +391,7 @@ def main():
     if payload is not None:
         if not is_voice_session(payload.get("session_id", "")):
             return
-        if is_duplicate(text):
+        if not mark_if_new(text):
             _log("skipping duplicate")
             return
         _log(f"speaking: {text[:80]!r}")
