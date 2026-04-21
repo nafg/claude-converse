@@ -34,4 +34,4 @@ line=$(python3 "$RENDER_PY" 2>/dev/null)
 [ -n "$line" ] || exit 0
 
 # Dim + yellow.
-printf '\033[2m\033[33m%s\033[0m\n' "$line"
+printf '\033[2;33m%s\033[0m\n' "$line"
