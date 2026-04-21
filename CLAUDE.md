@@ -51,14 +51,19 @@ Claude Code's statusline JSON payload through it.
 One-liner for fish:
 
 ```fish
-echo $session_json | eval (ls -dv ~/.claude/plugins/cache/claude-converse/converse/*/skills/converse/statusline-line.sh 2>/dev/null | tail -1)
+set h (command ls -d ~/.claude/plugins/cache/claude-converse/converse/*/skills/converse/statusline-line.sh 2>/dev/null | sort -V | tail -1); test -n "$h"; and echo $session_json | $h
 ```
 
 Bash equivalent:
 
 ```bash
-printf '%s' "$INPUT_JSON" | "$(ls -dv ~/.claude/plugins/cache/claude-converse/converse/*/skills/converse/statusline-line.sh 2>/dev/null | tail -1)"
+h=$(command ls -d ~/.claude/plugins/cache/claude-converse/converse/*/skills/converse/statusline-line.sh 2>/dev/null | sort -V | tail -1)
+[ -n "$h" ] && printf '%s' "$INPUT_JSON" | "$h"
 ```
+
+`command ls` bypasses any user alias to `eza` or another `ls` replacement that
+doesn't accept the same flags. `sort -V` does natural version sort so 0.10.0
+comes after 0.9.0.
 
 The wrapper prints nothing when voice mode is off, when a different session
 owns voice mode, or there's nothing to show. When voice mode is on for the
