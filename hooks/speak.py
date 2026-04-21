@@ -87,7 +87,7 @@ def kill_existing_tts():
         with open(TTS_PID_FILE) as f:
             pid = int(f.read().strip())
         os.killpg(os.getpgid(pid), signal.SIGTERM)
-    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError, OSError):
+    except (OSError, ValueError):
         pass
 
 
