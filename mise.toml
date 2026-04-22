@@ -1,0 +1,10 @@
+[tools]
+hk = "1.43"
+pkl = "latest"
+"pipx:commitizen" = "latest"
+
+[env]
+HK_MISE = 1
+
+[hooks]
+postinstall = "hk install --mise"
