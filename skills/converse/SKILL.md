@@ -26,9 +26,27 @@ Toggle the voice loop on or off. When on, Claude listens continuously via Monito
      4. **Look for completion signals** — only respond when you see a clear question, request, or complete statement. If in doubt, wait.
      5. **When in doubt, wait** — it is always better to wait too long than to interrupt. The user can always prompt you again if you're too slow, but jumping in early is disruptive.
 
-   - **Echo transcription**: Always echo what the user said as a blockquote (`> ...`) followed by a `---` delimiter.
-     - **Partial input** (still accumulating, not ready to respond): Echo the fragment as a blockquote + `---` with nothing after it. This shows the user the transcription is working without triggering TTS. Do NOT add any filler text like "waiting for more" — just the blockquote and delimiter.
-     - **Complete input** (ready to respond): Echo the full accumulated input as a blockquote, then `---`, then your response. The Stop hook speaks only what follows the `---`.
+   - **Echo transcription**: Wrap your interpretation of what you heard between `[heard]` and `[/heard]` markers, each on its own line at the very start of your message. Then write your response below.
+
+     The wrapper is a BBCode-style literal. Exact match is required for the Stop hook to strip correctly — do not substitute HTML tags (`<heard>` would be stripped by the markdown renderer, erasing the visible echo), alternative bracket shapes, or variant spellings. The opener must be byte-0 of the message: no leading whitespace, no preamble.
+
+     - **Partial input** (still accumulating, not ready to respond):
+       ```
+       [heard]
+       what you heard so far
+       [/heard]
+       ```
+       No content after `[/heard]`. TTS will not fire. Do NOT add filler like "waiting for more" — just the wrapper.
+
+     - **Complete input** (ready to respond):
+       ```
+       [heard]
+       what you heard
+       [/heard]
+
+       your response
+       ```
+       The Stop hook strips the wrapper and speaks only the response.
 
    - **Response style**: Keep responses concise and conversational. Short sentences. The user will hear this spoken aloud. Lists are fine but keep items brief.
 

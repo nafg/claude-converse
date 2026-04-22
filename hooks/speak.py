@@ -345,15 +345,20 @@ def speak(text: str):
 # ---------------------------------------------------------------------------
 
 def strip_echo_prefix(text: str) -> str:
-    """Strip the transcription echo (everything before ---) so we only speak the response."""
-    if "\n---\n" in text:
-        return text.split("\n---\n", 1)[1]
-    # Also handle --- at the very start of a line
+    """Strip a leading [heard]...[/heard] wrapper. Fail-open on missing or
+    malformed wrapper: returning the text unchanged speaks the echo
+    (benign) rather than silently truncating the response."""
     lines = text.split("\n")
-    for i, line in enumerate(lines):
-        if line.strip() == "---":
-            return "\n".join(lines[i + 1:])
-    return text
+    if lines[0] != "[heard]":
+        return text
+    try:
+        end = lines.index("[/heard]", 1)
+    except ValueError:
+        return text
+    i = end + 1
+    while i < len(lines) and lines[i].strip() == "":
+        i += 1
+    return "\n".join(lines[i:])
 
 
 def extract_text(raw: str, payload: dict | None) -> str | None:
