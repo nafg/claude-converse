@@ -17,6 +17,7 @@ stdout format: one line per final transcription (Monitor delivers each line as a
 stderr: logging (goes to Monitor's output file, not to Claude).
 """
 
+import argparse
 import fcntl
 import io
 import json
@@ -81,7 +82,6 @@ PRE_BUFFER_FRAMES = _int_env("VAD_PRE_BUFFER_FRAMES", 10)          # ~300ms
 # ---------------------------------------------------------------------------
 
 WHISPER_URL = os.environ.get("WHISPER_URL", "http://localhost:2022/v1/audio/transcriptions")
-WHISPER_INITIAL_PROMPT = os.environ.get("WHISPER_INITIAL_PROMPT", "")
 _DATA_DIR = os.environ.get("CLAUDE_PLUGIN_DATA", os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
 
 # PID_DIR is the stable cross-process path — speak.py writes TTS_PID_FILE
@@ -125,7 +125,7 @@ def kill_tts() -> None:
 # Whisper transcription
 # ---------------------------------------------------------------------------
 
-def transcribe(audio_bytes: bytes) -> str:
+def transcribe(audio_bytes: bytes, prompt: str) -> str:
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(CHANNELS)
@@ -135,8 +135,8 @@ def transcribe(audio_bytes: bytes) -> str:
     buf.seek(0)
 
     data = {"model": "base", "response_format": "json", "language": "en"}
-    if WHISPER_INITIAL_PROMPT:
-        data["prompt"] = WHISPER_INITIAL_PROMPT
+    if prompt:
+        data["prompt"] = prompt
 
     try:
         resp = requests.post(
@@ -204,10 +204,10 @@ def _append_recent(entry: dict) -> None:
         os.replace(tmp, RECENT_FILE)
 
 
-def _emit(utterance_id: int, is_final: bool, audio_data: bytes) -> None:
+def _emit(utterance_id: int, is_final: bool, audio_data: bytes, prompt: str) -> None:
     """Transcribe and publish. Finals go to stdout (AI) and recent file;
     non-finals go only to the recent file (status line)."""
-    text = transcribe(audio_data)
+    text = transcribe(audio_data, prompt)
     if not text:
         return
     _append_recent({"id": utterance_id, "final": is_final, "ts": time.time(), "text": text})
@@ -222,7 +222,7 @@ def _emit(utterance_id: int, is_final: bool, audio_data: bytes) -> None:
 # Main loop
 # ---------------------------------------------------------------------------
 
-def run() -> None:
+def run(whisper_prompt: str = "") -> None:
     # Acquire exclusive lock — only one voice session at a time
     lock_fh = open(LOCK_FILE, "w")
     try:
@@ -328,7 +328,7 @@ def run() -> None:
                     snapshot = b"".join(speech_frames)
                     threading.Thread(
                         target=_emit,
-                        args=(utterance_id, False, snapshot),
+                        args=(utterance_id, False, snapshot, whisper_prompt),
                         daemon=True,
                     ).start()
 
@@ -343,7 +343,7 @@ def run() -> None:
                         audio_data = b"".join(speech_frames)
                         threading.Thread(
                             target=_emit,
-                            args=(utterance_id, True, audio_data),
+                            args=(utterance_id, True, audio_data, whisper_prompt),
                             daemon=True,
                         ).start()
                     else:
@@ -363,4 +363,11 @@ def run() -> None:
 
 
 if __name__ == "__main__":
-    run()
+    parser = argparse.ArgumentParser(description="Voice loop listener")
+    parser.add_argument(
+        "--prompt",
+        default="",
+        help="Whisper initial prompt — domain vocabulary to prime the decoder",
+    )
+    args = parser.parse_args()
+    run(whisper_prompt=args.prompt)

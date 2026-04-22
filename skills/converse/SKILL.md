@@ -10,11 +10,11 @@ Toggle the voice loop on or off. When on, Claude listens continuously via Monito
 
 ## When invoked with "on" (or no argument)
 
-1. **Start the listener** via Monitor (persistent). Set `WHISPER_INITIAL_PROMPT` to prime Whisper's decoder with the conversation's domain vocabulary — a short phrase listing the main technologies, projects, or terms in play (e.g. "Python, Scala, Git, PyAudio, whisper-cpp"). Keep it under one sentence. This dramatically reduces mis-hears on technical terms.
+1. **Start the listener** via Monitor (persistent). Pass `--prompt` to prime Whisper's decoder with the conversation's domain vocabulary — a short phrase listing the main technologies, projects, or terms in play (e.g. "Python, Scala, Git, PyAudio, whisper-cpp"). Keep it under one sentence. This dramatically reduces mis-hears on technical terms.
    ```
-   WHISPER_INITIAL_PROMPT='<domain terms for this conversation>' listener.py
+   listener.py --prompt='<domain terms for this conversation>'
    ```
-   If you don't have enough context to write one yet (e.g. a fresh session), start without the env var and restart the listener with a prompt once the conversation focus is clear.
+   If you don't have enough context to write one yet (e.g. a fresh session), start without `--prompt` and restart the listener with one once the conversation focus is clear.
 
 2. **Follow voice mode protocol** for the rest of the session:
 
