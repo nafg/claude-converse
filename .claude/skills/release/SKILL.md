@@ -1,33 +1,13 @@
 ---
 name: release
-description: Cut a new release of the claude-converse plugin — bump version in both manifests, tag the bump commit, push the tag, create a GitHub release with auto-generated notes. Use when the user says "release", "cut a release", "ship X.Y.Z", "tag a version", or after landing a set of changes they want to publish.
+description: Cut a new release of the claude-converse plugin. Use when the user says "release", "cut a release", "ship X.Y.Z", or "tag a version".
 ---
 
 # Releasing claude-converse
 
 ## When to release
 
-Release when landing user-visible changes:
-
-- New features (voice behaviors, configuration options, statusline integration changes)
-- Bug fixes that change observable behavior
-- Breaking changes to plugin manifest, hooks, environment variables, or statusline contract
-
-Don't release for:
-
-- Internal refactors with identical behavior
-- Documentation-only changes (README tweaks, CLAUDE.md updates)
-- Test or CI-only changes
-
-**Cadence**: no fixed schedule. Release when there's something worth publishing and the tree is clean.
-
-## Version numbers
-
-Follow semver loosely:
-
-- **Patch (0.5.0 → 0.5.1)**: bug fixes, backward-compatible polish
-- **Minor (0.5.x → 0.6.0)**: new features, backward-compatible. Also any change to statusline or hook contract that users install-side need to know about.
-- **Major (0.x → 1.0)**: when the plugin is considered stable and we commit to not breaking users. Not there yet.
+**Only release when the user explicitly says to.** Do not infer readiness from completing a feature.
 
 ## The release process
 
@@ -38,25 +18,22 @@ Follow semver loosely:
    ```
    Abort if there are uncommitted changes or unpushed commits that aren't meant to ship.
 
-2. **Bump the version in both manifests** — `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`. Both must match.
+2. **Bump the version.**
    ```bash
-   # Edit both files, then:
-   git add .claude-plugin/plugin.json .claude-plugin/marketplace.json
-   git commit -m "Bump plugin version to X.Y.Z"
-   git push
+   cz bump
+   ```
+   Infers patch/minor from commit types. To override: `cz bump --increment MINOR` or `cz bump X.Y.Z`.
+
+3. **Push.**
+   ```bash
+   git push --follow-tags
    ```
 
-3. **Tag the bump commit and push the tag.**
-   ```bash
-   git tag -a vX.Y.Z -m "vX.Y.Z"
-   git push origin vX.Y.Z
-   ```
-
-4. **Write release notes by hand from the commit log.** Do **not** use `--generate-notes` — this repo has no PR workflow, so GitHub's auto-generation produces empty/useless output. Read the actual commits:
+4. **Write release notes.** Do **not** use `--generate-notes`. Use the commit log as raw material, but write human-readable prose — not a mechanical dump of commit messages. Use the log to jog your memory:
    ```bash
    git --no-pager log --oneline vPREV..vX.Y.Z
    ```
-   Group commits by theme (features / fixes / internals) if there are more than a few. Cite each commit's short sha in parentheses so readers can trace back. Then:
+   Then:
    ```bash
    gh release create vX.Y.Z --title "vX.Y.Z" --notes "$(cat <<'EOF'
    ## Theme
@@ -77,9 +54,3 @@ git --no-pager tag -l --sort=v:refname | tail -5   # tag is there
 gh repo view nafg/claude-converse --json latestRelease
 ```
 
-## Notes
-
-- **Tag the bump commit, not HEAD**. If you accidentally let another commit land on main between the bump and the tag, users who `git checkout vX.Y.Z` get a version mismatch. `git tag -a vX.Y.Z <bump-commit-sha>` avoids this.
-- **Both manifests**. `plugin.json` is what Claude Code reads after install; `marketplace.json` is what the marketplace UI shows pre-install. A mismatch means users see one version in the marketplace and another once installed.
-- **Pre-tag sanity check**: `grep -H version .claude-plugin/*.json` should show the same version in both files.
-- **Don't pre-push the tag** before the bump commit is on origin/main. `git push` the commit first; only tag+push the tag once the bump is upstream.
