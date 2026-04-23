@@ -1,3 +1,13 @@
+## v0.7.0 (2026-04-23)
+
+### Rewrite
+
+- rebuild Converse around a shared TypeScript voice core
+- add dual adapter model: Claude HTTP daemon + Pi in-process extension
+- replace Python listener/TTS/status scripts with TypeScript service, VAD, and adapters
+- move Claude status rendering into the daemon and keep hooks thin
+- keep env-var configuration and energy-based VAD semantics
+
 ## v0.6.1 (2026-04-22)
 
 ### Fix

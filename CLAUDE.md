@@ -1,137 +1,74 @@
-# Converse
+# Converse internals
 
-Non-blocking, interruptible voice interface for Claude Code.
+## Rewrite overview
 
-## Plugin Structure
+Converse has been rebuilt around a shared TypeScript voice core with two harness adapters:
 
-```
-.claude-plugin/plugin.json      — Plugin manifest
-skills/converse/SKILL.md        — /converse skill (toggle voice mode)
-skills/converse/listener.py     — Mic → energy VAD → Whisper STT → stdout
-hooks/hooks.json                — Hook registrations
-hooks/speak.py                  — TTS via Kokoro + Stop hook
-hooks/inject-session-id.py      — PreToolUse hook: injects authoritative
-                                   session_id into the listener's env
-```
+- **Claude**: HTTP daemon on localhost
+- **Pi**: in-process extension service
 
-## Services
+The old Python split (`listener.py`, `speak.py`, `render_status.py`, shell + lockfile coordination) has been removed in favor of:
 
-- Kokoro TTS: `http://localhost:8880/v1/audio/speech` (OpenAI-compatible)
-- Whisper STT: `http://localhost:2022/v1/audio/transcriptions` (whisper.cpp)
+- one shared service implementation
+- one energy-based VAD state machine
+- harness-specific transport/adapters only where needed
 
-### Whisper setup requirement
+## Claude transport
 
-whisper-server must be started with `--no-context`. Without it, the decoder's
-`prompt_past` token buffer persists across HTTP requests, so a single bad
-transcription contaminates every subsequent one until the server is restarted.
+Claude keeps the same high-level harness affordances:
 
-voicemode's default startup omits the flag. Add it to
-`~/.voicemode/services/whisper/bin/start-whisper-server.sh`:
+- **PreToolUse** rewrite injects the authoritative Claude session id by replacing `__CLAUDE_SESSION_ID__` in commands
+- **Monitor** consumes final transcripts from:
 
-```
-exec "$SERVER_BIN" \
-    --host 0.0.0.0 \
-    --port "$WHISPER_PORT" \
-    --model "$MODEL_PATH" \
-    --inference-path /v1/audio/transcriptions \
-    --threads 8 \
-    --no-context
+```text
+GET /v1/transcriptions/final?owner_id=<session>
 ```
 
-Then `voicemode service restart whisper`. The flag only disables cross-request
-context; within a single request, multi-window (30 s+) utterances still flow.
+- **Stop hook** sends assistant text to:
 
-## Statusline integration
-
-The plugin owns everything voice-related — lock-file gate, session-id check,
-render, color/dim styling. The user's statusline only needs to find the
-plugin's wrapper script (`skills/converse/statusline-line.sh`) and pipe
-Claude Code's statusline JSON payload through it.
-
-One-liner for fish:
-
-```fish
-set h (command ls -d ~/.claude/plugins/cache/claude-converse/converse/*/skills/converse/statusline-line.sh 2>/dev/null | sort -V | tail -1); test -n "$h"; and echo $session_json | $h
+```text
+POST /v1/speak
 ```
 
-Bash equivalent:
+- **Statusline** fetches already-rendered text from:
 
-```bash
-h=$(command ls -d ~/.claude/plugins/cache/claude-converse/converse/*/skills/converse/statusline-line.sh 2>/dev/null | sort -V | tail -1)
-[ -n "$h" ] && printf '%s' "$INPUT_JSON" | "$h"
+```text
+GET /v1/status?owner_id=<session>
 ```
 
-`command ls` bypasses any user alias to `eza` or another `ls` replacement that
-doesn't accept the same flags. `sort -V` does natural version sort so 0.10.0
-comes after 0.9.0.
+The Claude daemon starts explicitly on `/converse on` and shuts down explicitly on `/converse off`.
 
-The wrapper prints nothing when voice mode is off, when a different session
-owns voice mode, or there's nothing to show. When voice mode is on for the
-current session but the user is silent, it still prints just the mic emoji
-as a persistent "voice active" indicator.
+## Pi transport
 
-The underlying `render_status.py` is callable directly too (see its
-`--session-id` flag) — useful if your statusline can't easily forward
-stdin.
+Pi uses the same shared service object directly in-process.
 
-## How it works
+There is no Pi-side daemon. The extension binds the same configured port only to preserve global exclusivity with Claude.
 
-1. `/converse` starts listener via Monitor (persistent)
-2. User speaks → listener kills any TTS (barge-in) → transcribes → stdout → Monitor delivers to Claude
-3. Claude responds → Stop hook fires (async) → speak.py reads JSON, extracts message, plays TTS
-4. Loop back to 2
+## Exclusivity
 
-## Key details
+`CONVERSE_PORT` is the exclusivity mechanism.
 
-- speak.py auto-detects JSON (hook mode) vs plain text (manual mode)
-- In hook mode: kills existing TTS, runs async (configured in hooks.json)
-- PID file and logs stored in $CLAUDE_PLUGIN_DATA (or $XDG_RUNTIME_DIR, or /tmp)
-- All paths configurable via environment variables
+- Claude daemon binds it because it serves HTTP
+- Pi binds the same port while voice mode is active
+- if bind fails, voice mode is already active elsewhere
 
+## Voice pipeline
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
-## Beads Issue Tracker
+1. `arecord` streams raw PCM
+2. `EnergyVad` frames the stream and emits:
+   - speech start
+   - partial snapshot
+   - final snapshot
+   - barge-in
+3. final snapshots go to Whisper HTTP transcription
+4. assistant text goes to Kokoro HTTP synthesis
+5. synthesized WAV is played via `aplay`
 
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
+## TTS cleanup
 
-### Quick Reference
+The service preserves the previous fail-open behavior:
 
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
-```
+- if a leading `[heard] ... [/heard]` wrapper is well-formed, it is stripped before speech
+- if malformed or absent, text is spoken unchanged
 
-### Rules
-
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
-
-## Session Completion
-
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
-
-**MANDATORY WORKFLOW:**
-
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-   ```bash
-   git pull --rebase
-   bd dolt push
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
-
-**CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
-<!-- END BEADS INTEGRATION -->
+So Claude may still use the wrapper, but the runtime never depends on it.
