@@ -5,6 +5,7 @@ version_scheme = "semver2"
 version_provider = "scm"
 update_changelog_on_bump = true
 major_version_zero = true
+annotated_tag = true
 version_files = [
     ".claude-plugin/plugin.json:version",
     ".claude-plugin/marketplace.json:version",
