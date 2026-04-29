@@ -20,7 +20,7 @@ This branch rebuilds Converse around a shared **TypeScript voice core**:
 
 ### Claude
 
-- `src/claude/daemon.ts` — localhost HTTP daemon (compiled to `dist/claude/daemon.js`)
+- `src/claude/daemon.ts` — localhost HTTP daemon
 - `src/claude/inject-session-id.ts` — PreToolUse hook rewrite for `__CLAUDE_SESSION_ID__`
 - `src/claude/speak-hook.ts` — Stop hook → `POST /v1/speak`
 - `src/claude/shutdown.ts` — explicit daemon shutdown helper
@@ -29,7 +29,7 @@ This branch rebuilds Converse around a shared **TypeScript voice core**:
 
 ### Pi
 
-- `src/pi/index.ts` — in-process Pi extension (compiled to `dist/pi/index.js`)
+- `src/pi/index.ts` — in-process Pi extension
 
 ## Requirements
 
@@ -94,6 +94,12 @@ Install dependencies:
 
 ```bash
 npm install
+```
+
+Build before using Claude hooks or the Pi shim:
+
+```bash
+npm run build
 ```
 
 Build and run checks:
