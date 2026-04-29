@@ -1,5 +1,7 @@
 node_modules/
 dist/
+.pi/settings.json
+.pi/messenger/
 .claude/worktrees/
 pi-session-*.html
 __pycache__/
