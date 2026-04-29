@@ -8,8 +8,10 @@ const ABBREVS = /\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|vs|etc|approx|dept|est|govt|e\.g|i
 
 export const stripEchoPrefix = (text: string): string => {
   const lines = text.split("\n");
-  if (lines[0] !== "[heard]") return text;
-  const end = lines.indexOf("[/heard]", 1);
+  const opener = lines[0];
+  if (opener !== "[transcribed]" && opener !== "[heard]") return text;
+  const closer = opener === "[transcribed]" ? "[/transcribed]" : "[/heard]";
+  const end = lines.indexOf(closer, 1);
   if (end === -1) return text;
   let i = end + 1;
   while (i < lines.length && lines[i]?.trim() === "") i += 1;

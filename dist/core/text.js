@@ -4,9 +4,11 @@ const PARAGRAPH_PAUSE = 0.45;
 const ABBREVS = /\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|vs|etc|approx|dept|est|govt|e\.g|i\.e|a\.m|p\.m|U\.S|Inc|Ltd|Co|Corp|Gen|Gov|Sgt|Pvt|Capt|Lt|Cmdr|Adm|Rev|Hon|Pres|Vol|No)\.$/i;
 export const stripEchoPrefix = (text) => {
     const lines = text.split("\n");
-    if (lines[0] !== "[heard]")
+    const opener = lines[0];
+    if (opener !== "[transcribed]" && opener !== "[heard]")
         return text;
-    const end = lines.indexOf("[/heard]", 1);
+    const closer = opener === "[transcribed]" ? "[/transcribed]" : "[/heard]";
+    const end = lines.indexOf(closer, 1);
     if (end === -1)
         return text;
     let i = end + 1;

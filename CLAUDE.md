@@ -54,7 +54,7 @@ There is no Pi-side daemon. The extension binds the same configured port only to
 
 ## Voice pipeline
 
-1. `arecord` streams raw PCM
+1. `parecord` streams raw PCM from the OS-selected default input. Override `CONVERSE_RECORDER_COMMAND=arecord` and `CONVERSE_RECORDER_DEVICE=...` only if needed.
 2. `EnergyVad` frames the stream and emits:
    - speech start
    - partial snapshot
@@ -62,7 +62,7 @@ There is no Pi-side daemon. The extension binds the same configured port only to
    - barge-in
 3. final snapshots go to Whisper HTTP transcription
 4. assistant text goes to Kokoro HTTP synthesis
-5. synthesized WAV is played via `aplay`
+5. synthesized WAV is played via `paplay` to the OS-selected default output
 
 ## TTS cleanup
 

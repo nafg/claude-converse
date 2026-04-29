@@ -43,7 +43,7 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/v1/transcriptions/final") {
       const requestOwner = url.searchParams.get("owner_id") ?? "";
-      if (requestOwner && requestOwner !== ownerId) {
+      if (!requestOwner || requestOwner !== ownerId) {
         response.writeHead(409, { "content-type": "text/plain; charset=utf-8" });
         response.end("owner mismatch\n");
         return;

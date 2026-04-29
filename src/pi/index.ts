@@ -72,8 +72,9 @@ export default function conversePiExtension(pi: ExtensionAPI) {
     const ownerId = ctx.sessionManager.getSessionFile() ?? "pi-session";
     service = new ConverseService(config, ownerId);
     service.on("final-transcript", (entry) => {
-      if (ctx.isIdle()) pi.sendUserMessage(entry.text);
-      else pi.sendUserMessage(entry.text, { deliverAs: "steer" });
+      const text = `Transcribed: ${entry.text}`;
+      if (ctx.isIdle()) pi.sendUserMessage(text);
+      else pi.sendUserMessage(text, { deliverAs: "steer" });
       renderIdleStatus();
     });
     service.on("partial-transcript", () => renderIdleStatus());

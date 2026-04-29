@@ -7,7 +7,13 @@ const raw = await new Promise((resolve) => {
 });
 if (!raw.trim())
     process.exit(0);
-const payload = JSON.parse(raw);
+let payload;
+try {
+    payload = JSON.parse(raw);
+}
+catch {
+    process.exit(0);
+}
 const command = payload.tool_input?.command ?? "";
 const sessionId = payload.session_id ?? "";
 if (!command || !sessionId || !command.includes("__CLAUDE_SESSION_ID__"))

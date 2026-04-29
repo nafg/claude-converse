@@ -33,12 +33,16 @@ export interface ConverseConfig {
 
 const intEnv = (name: string, fallback: number): number => {
   const value = process.env[name];
-  return value ? Number.parseInt(value, 10) : fallback;
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
 };
 
 const floatEnv = (name: string, fallback: number): number => {
   const value = process.env[name];
-  return value ? Number.parseFloat(value) : fallback;
+  if (!value) return fallback;
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 };
 
 const stringListEnv = (name: string): string[] => {
@@ -47,10 +51,16 @@ const stringListEnv = (name: string): string[] => {
   return value.split(/\s+/g);
 };
 
-export const loadConfig = (): ConverseConfig => ({
+export const loadConfig = (): ConverseConfig => {
+  const bytesPerSample = intEnv("CONVERSE_BYTES_PER_SAMPLE", 2);
+  if (bytesPerSample !== 2) {
+    throw new Error(`CONVERSE_BYTES_PER_SAMPLE=${bytesPerSample} is unsupported; only 2-byte S16_LE audio is supported`);
+  }
+
+  return {
   sampleRate: intEnv("CONVERSE_SAMPLE_RATE", 16_000),
   channels: intEnv("CONVERSE_CHANNELS", 1),
-  bytesPerSample: intEnv("CONVERSE_BYTES_PER_SAMPLE", 2),
+  bytesPerSample,
   frameDurationMs: intEnv("CONVERSE_FRAME_DURATION_MS", 30),
   vadThreshold: intEnv("VAD_THRESHOLD", 300),
   vadSpeechStartFrames: intEnv("VAD_SPEECH_START_FRAMES", 3),
@@ -71,11 +81,12 @@ export const loadConfig = (): ConverseConfig => ({
   kokoroUrl: process.env.KOKORO_URL ?? "http://localhost:8880/v1/audio/speech",
   kokoroVoice: process.env.KOKORO_VOICE ?? "af_heart",
   kokoroModel: process.env.KOKORO_MODEL ?? "kokoro",
-  recorderCommand: process.env.CONVERSE_RECORDER_COMMAND ?? "arecord",
+  recorderCommand: process.env.CONVERSE_RECORDER_COMMAND ?? "parecord",
   recorderDevice: process.env.CONVERSE_RECORDER_DEVICE ?? "default",
   recorderAdditionalArgs: stringListEnv("CONVERSE_RECORDER_ARGS"),
-  playerCommand: process.env.CONVERSE_PLAYER_COMMAND ?? "aplay",
+  playerCommand: process.env.CONVERSE_PLAYER_COMMAND ?? "paplay",
   playerAdditionalArgs: stringListEnv("CONVERSE_PLAYER_ARGS"),
   host: process.env.CONVERSE_HOST ?? "127.0.0.1",
   port: intEnv("CONVERSE_PORT", 45839),
-});
+};
+};

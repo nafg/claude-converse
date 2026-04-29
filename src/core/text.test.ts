@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { speakableText, splitSpeechChunks, stripEchoPrefix } from "./text.js";
 
 describe("stripEchoPrefix", () => {
-  it("strips a well-formed heard wrapper", () => {
+  it("strips a well-formed transcribed wrapper", () => {
+    expect(stripEchoPrefix("[transcribed]\nhello\n[/transcribed]\n\nresponse")).toBe("response");
+  });
+
+  it("still strips the legacy heard wrapper", () => {
     expect(stripEchoPrefix("[heard]\nhello\n[/heard]\n\nresponse")).toBe("response");
   });
 
@@ -14,7 +18,7 @@ describe("stripEchoPrefix", () => {
 
 describe("speakableText", () => {
   it("returns null when only wrapper is present", () => {
-    expect(speakableText("[heard]\nhello\n[/heard]\n")).toBeNull();
+    expect(speakableText("[transcribed]\nhello\n[/transcribed]\n")).toBeNull();
   });
 });
 

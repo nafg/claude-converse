@@ -9,10 +9,19 @@ const raw = await new Promise<string>((resolve) => {
 });
 if (!raw.trim()) process.exit(0);
 
-const payload = JSON.parse(raw) as {
+let payload: {
   session_id?: string;
   last_assistant_message?: string;
 };
+
+try {
+  payload = JSON.parse(raw) as {
+    session_id?: string;
+    last_assistant_message?: string;
+  };
+} catch {
+  process.exit(0);
+}
 
 const ownerId = payload.session_id ?? "";
 const text = payload.last_assistant_message ?? "";

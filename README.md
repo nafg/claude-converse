@@ -6,7 +6,7 @@ This branch rebuilds Converse around a shared **TypeScript voice core**:
 
 - **Claude adapter**: runs a localhost HTTP daemon
 - **Pi adapter**: runs the same service in-process inside the extension
-- **Linux audio tools**: microphone capture via `arecord`, playback via `aplay`
+- **Linux audio tools**: microphone capture via `parecord`, playback via `paplay` by default
 - **STT/TTS backends**: Whisper-compatible HTTP and Kokoro-compatible HTTP
 
 ## Current architecture
@@ -38,8 +38,7 @@ Linux only for now.
 You need:
 
 - Node.js
-- `arecord` (usually from `alsa-utils`)
-- `aplay` (usually from `alsa-utils`)
+- `parecord` / `paplay` (usually from PulseAudio/PipeWire Pulse tools)
 - a Whisper-compatible server
 - a Kokoro-compatible TTS server
 
@@ -58,9 +57,9 @@ Common variables:
 - `KOKORO_URL` — default `http://localhost:8880/v1/audio/speech`
 - `KOKORO_VOICE` — default `af_heart`
 - `KOKORO_MODEL` — default `kokoro`
-- `CONVERSE_RECORDER_COMMAND` — default `arecord`
-- `CONVERSE_RECORDER_DEVICE` — default `default`
-- `CONVERSE_PLAYER_COMMAND` — default `aplay`
+- `CONVERSE_RECORDER_COMMAND` — default `parecord`
+- `CONVERSE_RECORDER_DEVICE` — default `default` (used only by the `arecord` fallback)
+- `CONVERSE_PLAYER_COMMAND` — default `paplay`
 
 VAD tuning variables remain available:
 

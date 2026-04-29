@@ -1,7 +1,6 @@
 import { EventEmitter } from "node:events";
-import { spawn, type ChildProcessByStdio } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { Readable, Writable } from "node:stream";
 import type { ConverseConfig } from "./config.js";
 import { encodeWav } from "./wav.js";
 import { hashText, speakableText, splitSpeechChunks } from "./text.js";
@@ -17,10 +16,10 @@ interface ServiceEvents {
 
 export class ConverseService extends EventEmitter<ServiceEvents> {
   private readonly vad: EnergyVad;
-  private recorder?: ChildProcessByStdio<null, Readable, Readable>;
+  private recorder?: ChildProcess;
   private recorderCarry = Buffer.alloc(0);
   private recentEntries: TranscriptEntry[] = [];
-  private activeTts?: ChildProcessByStdio<Writable, null, Readable>;
+  private activeTts?: ChildProcess;
   private speakGeneration = 0;
   private lastSpokenHash?: string;
 
@@ -34,21 +33,7 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
 
   async start(): Promise<void> {
     if (this.recorder) return;
-    const args = [
-      "-q",
-      "-D",
-      this.config.recorderDevice,
-      "-c",
-      String(this.config.channels),
-      "-f",
-      "S16_LE",
-      "-r",
-      String(this.config.sampleRate),
-      "-t",
-      "raw",
-      ...this.config.recorderAdditionalArgs,
-      "-",
-    ];
+    const args = this.recorderArgs();
     const recorder = spawn(this.config.recorderCommand, args, { stdio: ["ignore", "pipe", "pipe"] });
     this.recorder = recorder;
     recorder.stdout.on("data", (chunk: Buffer) => this.onRecorderData(chunk));
@@ -184,7 +169,37 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
     return Buffer.from(await response.arrayBuffer());
   }
 
+  private recorderArgs(): string[] {
+    const command = this.config.recorderCommand.split("/").pop() ?? this.config.recorderCommand;
+    if (command === "parecord") {
+      return [
+        "--raw",
+        "--format=s16le",
+        `--rate=${this.config.sampleRate}`,
+        `--channels=${this.config.channels}`,
+        ...this.config.recorderAdditionalArgs,
+      ];
+    }
+    return [
+      "-q",
+      "-D",
+      this.config.recorderDevice,
+      "-c",
+      String(this.config.channels),
+      "-f",
+      "S16_LE",
+      "-r",
+      String(this.config.sampleRate),
+      "-t",
+      "raw",
+      ...this.config.recorderAdditionalArgs,
+      "-",
+    ];
+  }
+
   private playWav(wav: Buffer, generation: number): Promise<void> {
+    const command = this.config.playerCommand.split("/").pop() ?? this.config.playerCommand;
+    if (command === "paplay") return this.playWavViaTempFile(wav, generation);
     return new Promise((resolve, reject) => {
       const child = spawn(this.config.playerCommand, ["-q", ...this.config.playerAdditionalArgs, "-"], {
         stdio: ["pipe", "ignore", "pipe"],
@@ -204,5 +219,35 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
       child.stdin.on("error", reject);
       child.stdin.end(wav);
     });
+  }
+
+  private async playWavViaTempFile(wav: Buffer, generation: number): Promise<void> {
+    const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "converse-tts-"));
+    const file = join(dir, "speech.wav");
+    await writeFile(file, wav);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(this.config.playerCommand, [...this.config.playerAdditionalArgs, file], {
+          stdio: ["ignore", "ignore", "pipe"],
+        });
+        this.activeTts = child;
+        child.on("error", reject);
+        child.stderr.on("data", () => undefined);
+        child.on("close", (code, signal) => {
+          if (this.activeTts === child) this.activeTts = undefined;
+          if (generation !== this.speakGeneration || signal === "SIGTERM") {
+            resolve();
+            return;
+          }
+          if (code === 0) resolve();
+          else reject(new Error(`Player exited unexpectedly: code=${code} signal=${signal}`));
+        });
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   }
 }

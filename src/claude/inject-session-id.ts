@@ -9,10 +9,19 @@ const raw = await new Promise<string>((resolve) => {
 
 if (!raw.trim()) process.exit(0);
 
-const payload = JSON.parse(raw) as {
+let payload: {
   session_id?: string;
   tool_input?: { command?: string };
 };
+
+try {
+  payload = JSON.parse(raw) as {
+    session_id?: string;
+    tool_input?: { command?: string };
+  };
+} catch {
+  process.exit(0);
+}
 
 const command = payload.tool_input?.command ?? "";
 const sessionId = payload.session_id ?? "";

@@ -30,7 +30,7 @@ curl -NsS "http://${CONVERSE_HOST:-127.0.0.1}:${CONVERSE_PORT:-45839}/v1/transcr
 3. Follow the same voice protocol as before:
    - accumulate fragments before responding
    - keep spoken responses concise
-   - if you emit a leading `[heard] ... [/heard]` block, the TTS path strips it opportunistically, but do not rely on it being required
+   - if you echo the transcription, use a leading `[transcribed] ... [/transcribed]` block so the TTS path can strip it before speech
 
 ## When invoked with "off"
 
@@ -46,5 +46,6 @@ node "${CLAUDE_PLUGIN_ROOT}/dist/claude/shutdown.js" __CLAUDE_SESSION_ID__
 ## Notes
 
 - Linux only
-- Requires `arecord`, `aplay`, Whisper HTTP, and Kokoro HTTP
+- Requires `parecord`, `paplay`, Whisper HTTP, and Kokoro HTTP
+- Audio defaults to the OS-selected input/output devices through PulseAudio/PipeWire.
 - Only one active converse owner may exist at a time; startup fails if the port is already in use

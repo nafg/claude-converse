@@ -8,7 +8,13 @@ const raw = await new Promise((resolve) => {
 });
 if (!raw.trim())
     process.exit(0);
-const payload = JSON.parse(raw);
+let payload;
+try {
+    payload = JSON.parse(raw);
+}
+catch {
+    process.exit(0);
+}
 const ownerId = payload.session_id ?? "";
 const text = payload.last_assistant_message ?? "";
 if (!ownerId || !text.trim())

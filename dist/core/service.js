@@ -23,21 +23,7 @@ export class ConverseService extends EventEmitter {
     async start() {
         if (this.recorder)
             return;
-        const args = [
-            "-q",
-            "-D",
-            this.config.recorderDevice,
-            "-c",
-            String(this.config.channels),
-            "-f",
-            "S16_LE",
-            "-r",
-            String(this.config.sampleRate),
-            "-t",
-            "raw",
-            ...this.config.recorderAdditionalArgs,
-            "-",
-        ];
+        const args = this.recorderArgs();
         const recorder = spawn(this.config.recorderCommand, args, { stdio: ["ignore", "pipe", "pipe"] });
         this.recorder = recorder;
         recorder.stdout.on("data", (chunk) => this.onRecorderData(chunk));
@@ -181,7 +167,37 @@ export class ConverseService extends EventEmitter {
             throw new Error(`Kokoro request failed: ${response.status}`);
         return Buffer.from(await response.arrayBuffer());
     }
+    recorderArgs() {
+        const command = this.config.recorderCommand.split("/").pop() ?? this.config.recorderCommand;
+        if (command === "parecord") {
+            return [
+                "--raw",
+                "--format=s16le",
+                `--rate=${this.config.sampleRate}`,
+                `--channels=${this.config.channels}`,
+                ...this.config.recorderAdditionalArgs,
+            ];
+        }
+        return [
+            "-q",
+            "-D",
+            this.config.recorderDevice,
+            "-c",
+            String(this.config.channels),
+            "-f",
+            "S16_LE",
+            "-r",
+            String(this.config.sampleRate),
+            "-t",
+            "raw",
+            ...this.config.recorderAdditionalArgs,
+            "-",
+        ];
+    }
     playWav(wav, generation) {
+        const command = this.config.playerCommand.split("/").pop() ?? this.config.playerCommand;
+        if (command === "paplay")
+            return this.playWavViaTempFile(wav, generation);
         return new Promise((resolve, reject) => {
             const child = spawn(this.config.playerCommand, ["-q", ...this.config.playerAdditionalArgs, "-"], {
                 stdio: ["pipe", "ignore", "pipe"],
@@ -204,5 +220,38 @@ export class ConverseService extends EventEmitter {
             child.stdin.on("error", reject);
             child.stdin.end(wav);
         });
+    }
+    async playWavViaTempFile(wav, generation) {
+        const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+        const { tmpdir } = await import("node:os");
+        const { join } = await import("node:path");
+        const dir = await mkdtemp(join(tmpdir(), "converse-tts-"));
+        const file = join(dir, "speech.wav");
+        await writeFile(file, wav);
+        try {
+            await new Promise((resolve, reject) => {
+                const child = spawn(this.config.playerCommand, [...this.config.playerAdditionalArgs, file], {
+                    stdio: ["ignore", "ignore", "pipe"],
+                });
+                this.activeTts = child;
+                child.on("error", reject);
+                child.stderr.on("data", () => undefined);
+                child.on("close", (code, signal) => {
+                    if (this.activeTts === child)
+                        this.activeTts = undefined;
+                    if (generation !== this.speakGeneration || signal === "SIGTERM") {
+                        resolve();
+                        return;
+                    }
+                    if (code === 0)
+                        resolve();
+                    else
+                        reject(new Error(`Player exited unexpectedly: code=${code} signal=${signal}`));
+                });
+            });
+        }
+        finally {
+            await rm(dir, { recursive: true, force: true });
+        }
     }
 }
