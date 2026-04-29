@@ -1,0 +1,37 @@
+{
+  "name": "claude-converse",
+  "version": "0.7.0",
+  "type": "module",
+  "description": "Shared TypeScript voice core with Claude and Pi adapters",
+  "license": "MIT",
+  "author": "Naftoli Gugenheim",
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": ["pi-package"],
+  "bin": {
+    "converse-claude-daemon": "./dist/claude/daemon.js",
+    "converse-claude-speak-hook": "./dist/claude/speak-hook.js",
+    "converse-claude-inject-session-id": "./dist/claude/inject-session-id.js",
+    "converse-claude-shutdown": "./dist/claude/shutdown.js"
+  },
+  "pi": {
+    "extensions": ["./dist/pi"]
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@mariozechner/pi-coding-agent": "0.69.0",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*"
+  }
+}
