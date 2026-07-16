@@ -37,6 +37,7 @@ describe("loadConfig", () => {
     const config = loadConfig();
     expect(config.port).toBe(45839);
     expect(config.vadBargeInEnergyMultiplier).toBe(2);
+    expect(config.vadUtteranceEndFrames).toBe(60);
   });
 
   it("rejects unsupported bytes-per-sample values", () => {

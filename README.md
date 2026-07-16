@@ -76,7 +76,7 @@ VAD tuning variables remain available:
 - `VAD_THRESHOLD`
 - `VAD_SPEECH_START_FRAMES`
 - `VAD_CHUNK_SILENCE_FRAMES`
-- `VAD_UTTERANCE_END_FRAMES`
+- `VAD_UTTERANCE_END_FRAMES` — default `60` (~1.8 seconds at the default frame duration)
 - `VAD_MIN_UTTERANCE_FRAMES`
 - `VAD_BARGE_IN_ENERGY_MULT`
 - `VAD_BARGE_IN_FRAMES`

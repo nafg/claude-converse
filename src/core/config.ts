@@ -104,7 +104,7 @@ export const loadConfig = (): ConverseConfig => {
   vadThreshold: intEnv("VAD_THRESHOLD", 300),
   vadSpeechStartFrames: intEnv("VAD_SPEECH_START_FRAMES", 3),
   vadChunkSilenceFrames: intEnv("VAD_CHUNK_SILENCE_FRAMES", 20),
-  vadUtteranceEndFrames: intEnv("VAD_UTTERANCE_END_FRAMES", 50),
+  vadUtteranceEndFrames: intEnv("VAD_UTTERANCE_END_FRAMES", 60),
   vadMinUtteranceFrames: intEnv("VAD_MIN_UTTERANCE_FRAMES", 10),
   vadBargeInEnergyMultiplier: floatEnv("VAD_BARGE_IN_ENERGY_MULT", 2.0),
   vadBargeInFrames: intEnv("VAD_BARGE_IN_FRAMES", 6),
