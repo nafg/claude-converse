@@ -7,7 +7,7 @@ This branch rebuilds Converse around a shared **TypeScript voice core**:
 - **Claude adapter**: runs a localhost HTTP daemon
 - **Pi adapter**: runs the same service in-process inside the extension
 - **Linux audio tools**: microphone capture via `parecord`, playback via `paplay` by default
-- **STT/TTS backends**: Whisper-compatible HTTP and Kokoro-compatible HTTP
+- **STT/TTS backends**: local Whisper/Kokoro HTTP or OpenAI's hosted Audio API (selected automatically when `OPENAI_API_KEY` is available)
 
 ## Current architecture
 
@@ -39,24 +39,34 @@ You need:
 
 - Node.js
 - `parecord` / `paplay` (usually from PulseAudio/PipeWire Pulse tools)
-- a Whisper-compatible server
-- a Kokoro-compatible TTS server
+- **recommended:** an `OPENAI_API_KEY`, which uses OpenAI's hosted transcription and TTS APIs and keeps Whisper/Kokoro off this computer
+- **or:** a Whisper-compatible server and a Kokoro-compatible TTS server
 
 ## Configuration
 
 Configuration stays env-var driven.
 
+### Hosted audio (recommended)
+
+OpenAI is the recommended hosted backend because its Audio API supplies both services this project needs, accepts the existing OpenAI-compatible transcription payload, and returns WAV directly for the existing player. If `OPENAI_API_KEY` is set, Converse **automatically selects it**, so no additional setting is needed. It uses `gpt-4o-transcribe` for STT and `gpt-4o-mini-tts` with the `alloy` voice for TTS.
+
+To opt out and keep all audio processing local, set `CONVERSE_VOICE_PROVIDER=local`. To make the hosted choice explicit, set `CONVERSE_VOICE_PROVIDER=openai`; this requires `OPENAI_API_KEY`.
+
 Common variables:
 
 - `CONVERSE_HOST` — default `127.0.0.1`
 - `CONVERSE_PORT` — default `45839`
-- `WHISPER_URL` — default `http://localhost:2022/v1/audio/transcriptions`
-- `WHISPER_MODEL` — default `base`
+- `CONVERSE_VOICE_PROVIDER` — `openai` or `local`; defaults to `openai` when `OPENAI_API_KEY` is set, otherwise `local`
+- `OPENAI_API_KEY` — enables the hosted OpenAI STT/TTS backend; never stored by Converse
+- `CONVERSE_API_TIMEOUT_MS` — maximum time for each transcription or speech request; default `60000`
+- `WHISPER_URL` — transcription URL; defaults to OpenAI or `http://localhost:2022/v1/audio/transcriptions` for local. OpenAI mode accepts only `https://api.openai.com` URLs, so its key cannot be sent to an arbitrary override.
+- `WHISPER_MODEL` — defaults to `gpt-4o-transcribe` on OpenAI or `base` locally
 - `WHISPER_LANGUAGE` — default `en`
 - `WHISPER_INITIAL_PROMPT` — default empty
-- `KOKORO_URL` — default `http://localhost:8880/v1/audio/speech`
-- `KOKORO_VOICE` — default `af_heart`
-- `KOKORO_MODEL` — default `kokoro`
+- `KOKORO_URL` — speech URL; defaults to OpenAI or `http://localhost:8880/v1/audio/speech` for local
+- `KOKORO_VOICE` — defaults to `alloy` on OpenAI or `af_heart` locally
+- `KOKORO_MODEL` — defaults to `gpt-4o-mini-tts` on OpenAI or `kokoro` locally
+- `CONVERSE_TTS_SPEED` — OpenAI speech speed from `0.25` to `4`; defaults to `1.25` for a more conversational pace
 - `CONVERSE_RECORDER_COMMAND` — default `parecord`
 - `CONVERSE_RECORDER_DEVICE` — default `default` (used only by the `arecord` fallback)
 - `CONVERSE_PLAYER_COMMAND` — default `paplay`

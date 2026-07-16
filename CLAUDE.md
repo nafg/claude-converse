@@ -60,8 +60,8 @@ There is no Pi-side daemon. The extension binds the same configured port only to
    - partial snapshot
    - final snapshot
    - barge-in
-3. final snapshots go to Whisper HTTP transcription
-4. assistant text goes to Kokoro HTTP synthesis
+3. final snapshots go to OpenAI transcription when `OPENAI_API_KEY` is set (the default), otherwise local Whisper HTTP transcription
+4. assistant text goes to OpenAI speech synthesis when `OPENAI_API_KEY` is set, otherwise local Kokoro HTTP synthesis
 5. synthesized WAV is played via `paplay` to the OS-selected default output
 
 ## TTS cleanup

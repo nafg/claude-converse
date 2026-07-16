@@ -109,7 +109,8 @@ export default function conversePiExtension(pi: ExtensionAPI) {
       }
       try {
         await startService(ctx);
-        ctx.ui.notify("voice mode on", "info");
+        const backend = config.voiceProvider === "openai" ? "OpenAI Audio API" : "local Whisper/Kokoro";
+        ctx.ui.notify(`voice mode on (${backend})`, "info");
       } catch (error) {
         await stopService();
         const message = error instanceof Error ? error.message : String(error);

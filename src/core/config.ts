@@ -15,6 +15,9 @@ export interface ConverseConfig {
   statusWindowSeconds: number;
   statusPrefix: string;
   statusSeparator: string;
+  voiceProvider: "local" | "openai";
+  apiKey?: string;
+  apiTimeoutMs: number;
   whisperUrl: string;
   whisperModel: string;
   whisperLanguage: string;
@@ -22,6 +25,7 @@ export interface ConverseConfig {
   kokoroUrl: string;
   kokoroVoice: string;
   kokoroModel: string;
+  ttsSpeed: number;
   recorderCommand: string;
   recorderDevice: string;
   recorderAdditionalArgs: string[];
@@ -51,10 +55,45 @@ const stringListEnv = (name: string): string[] => {
   return value.split(/\s+/g);
 };
 
+const voiceProvider = (): "local" | "openai" => {
+  const configured = process.env.CONVERSE_VOICE_PROVIDER?.trim().toLowerCase();
+  if (!configured) return process.env.OPENAI_API_KEY?.trim() ? "openai" : "local";
+  if (configured === "local" || configured === "openai") return configured;
+  throw new Error(`CONVERSE_VOICE_PROVIDER=${configured} is unsupported; use local or openai`);
+};
+
+const isOpenAiUrl = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "api.openai.com";
+  } catch {
+    return false;
+  }
+};
+
 export const loadConfig = (): ConverseConfig => {
   const bytesPerSample = intEnv("CONVERSE_BYTES_PER_SAMPLE", 2);
   if (bytesPerSample !== 2) {
     throw new Error(`CONVERSE_BYTES_PER_SAMPLE=${bytesPerSample} is unsupported; only 2-byte S16_LE audio is supported`);
+  }
+
+  const provider = voiceProvider();
+  const apiKey = provider === "openai" ? process.env.OPENAI_API_KEY?.trim() : undefined;
+  if (provider === "openai" && !apiKey) {
+    throw new Error("OPENAI_API_KEY must be set when CONVERSE_VOICE_PROVIDER=openai");
+  }
+  const apiTimeoutMs = intEnv("CONVERSE_API_TIMEOUT_MS", 60_000);
+  if (apiTimeoutMs <= 0) {
+    throw new Error("CONVERSE_API_TIMEOUT_MS must be a positive integer");
+  }
+  const ttsSpeed = floatEnv("CONVERSE_TTS_SPEED", 1.25);
+  if (ttsSpeed < 0.25 || ttsSpeed > 4) {
+    throw new Error("CONVERSE_TTS_SPEED must be between 0.25 and 4");
+  }
+  const whisperUrl = process.env.WHISPER_URL ?? (provider === "openai" ? "https://api.openai.com/v1/audio/transcriptions" : "http://localhost:2022/v1/audio/transcriptions");
+  const kokoroUrl = process.env.KOKORO_URL ?? (provider === "openai" ? "https://api.openai.com/v1/audio/speech" : "http://localhost:8880/v1/audio/speech");
+  if (provider === "openai" && (!isOpenAiUrl(whisperUrl) || !isOpenAiUrl(kokoroUrl))) {
+    throw new Error("WHISPER_URL and KOKORO_URL must use https://api.openai.com when CONVERSE_VOICE_PROVIDER=openai");
   }
 
   return {
@@ -74,13 +113,17 @@ export const loadConfig = (): ConverseConfig => {
   statusWindowSeconds: intEnv("CONVERSE_STATUS_WINDOW", 30),
   statusPrefix: process.env.CONVERSE_STATUS_PREFIX ?? "🎤 ",
   statusSeparator: process.env.CONVERSE_STATUS_SEPARATOR ?? " | ",
-  whisperUrl: process.env.WHISPER_URL ?? "http://localhost:2022/v1/audio/transcriptions",
-  whisperModel: process.env.WHISPER_MODEL ?? "base",
+  voiceProvider: provider,
+  apiKey,
+  apiTimeoutMs,
+  whisperUrl,
+  whisperModel: process.env.WHISPER_MODEL ?? (provider === "openai" ? "gpt-4o-transcribe" : "base"),
   whisperLanguage: process.env.WHISPER_LANGUAGE ?? "en",
   whisperPrompt: process.env.WHISPER_INITIAL_PROMPT ?? "",
-  kokoroUrl: process.env.KOKORO_URL ?? "http://localhost:8880/v1/audio/speech",
-  kokoroVoice: process.env.KOKORO_VOICE ?? "af_heart",
-  kokoroModel: process.env.KOKORO_MODEL ?? "kokoro",
+  kokoroUrl,
+  kokoroVoice: process.env.KOKORO_VOICE ?? (provider === "openai" ? "alloy" : "af_heart"),
+  kokoroModel: process.env.KOKORO_MODEL ?? (provider === "openai" ? "gpt-4o-mini-tts" : "kokoro"),
+  ttsSpeed,
   recorderCommand: process.env.CONVERSE_RECORDER_COMMAND ?? "parecord",
   recorderDevice: process.env.CONVERSE_RECORDER_DEVICE ?? "default",
   recorderAdditionalArgs: stringListEnv("CONVERSE_RECORDER_ARGS"),
