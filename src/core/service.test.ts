@@ -56,6 +56,22 @@ describe("ConverseService API authentication", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("aborts an in-flight hosted synthesis when speaking stops", async () => {
+    let requestSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      requestSignal = init.signal as AbortSignal;
+      return new Promise<Response>(() => undefined);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new ConverseService({ ...loadConfig(), voiceProvider: "openai", apiKey: "test-key" }, "test-owner");
+
+    void service.speak("Still synthesizing.", "test-owner");
+    await vi.waitFor(() => expect(requestSignal).toBeDefined());
+    service.stopSpeaking();
+
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
   it("prefetches the next hosted sentence before playing the current one", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(Buffer.from("wav"), { status: 200 })));
     vi.stubGlobal("fetch", fetchMock);

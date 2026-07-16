@@ -27,6 +27,7 @@ export default function conversePiExtension(pi: ExtensionAPI) {
   let latestCtx: ExtensionContext | undefined;
   let service: ConverseService | undefined;
   let claimServer: net.Server | undefined;
+  const speechTasks = new Set<Promise<void>>();
 
   const renderIdleStatus = () => {
     if (!latestCtx?.hasUI) return;
@@ -51,6 +52,7 @@ export default function conversePiExtension(pi: ExtensionAPI) {
       service = undefined;
       await current.stop();
     }
+    await Promise.allSettled(speechTasks);
     renderIdleStatus();
   };
 
@@ -92,10 +94,22 @@ export default function conversePiExtension(pi: ExtensionAPI) {
     await stopService();
   });
 
-  pi.on("message_end", async (event, _ctx) => {
+  pi.on("message_end", (event, ctx) => {
     if (!service) return;
     const text = extractAssistantText(event.message);
-    if (text) await service.speak(text, service.ownerId);
+    if (!text) return;
+
+    const current = service;
+    let task: Promise<void>;
+    task = current.speak(text, current.ownerId)
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        if (service !== current) return;
+        const message = error instanceof Error ? error.message : String(error);
+        ctx.ui.notify(`converse error: ${message}`, "error");
+      })
+      .finally(() => speechTasks.delete(task));
+    speechTasks.add(task);
   });
 
   pi.registerCommand("converse", {

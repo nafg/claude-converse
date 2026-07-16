@@ -20,6 +20,7 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
   private recorderCarry = Buffer.alloc(0);
   private recentEntries: TranscriptEntry[] = [];
   private activeTts?: ChildProcess;
+  private speechAbortController?: AbortController;
   private speakGeneration = 0;
   private lastSpokenHash?: string;
 
@@ -74,31 +75,46 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
     this.lastSpokenHash = digest;
     this.stopSpeaking();
     const generation = ++this.speakGeneration;
+    const abortController = new AbortController();
+    this.speechAbortController = abortController;
 
-    const chunks = splitSpeechChunks(source);
-    if (this.config.voiceProvider === "openai") return this.speakHostedChunks(chunks, generation);
+    try {
+      const chunks = splitSpeechChunks(source);
+      if (this.config.voiceProvider === "openai") {
+        return await this.speakHostedChunks(chunks, generation, abortController.signal);
+      }
 
-    for (const chunk of chunks) {
-      if (generation !== this.speakGeneration) return false;
-      const wav = await this.synthesize(chunk.text);
-      if (generation !== this.speakGeneration) return false;
-      await this.playWav(wav, generation);
-      if (generation !== this.speakGeneration) return false;
-      if (chunk.pauseSeconds > 0) await sleep(chunk.pauseSeconds * 1000);
+      for (const chunk of chunks) {
+        if (generation !== this.speakGeneration) return false;
+        const wav = await this.synthesize(chunk.text, abortController.signal);
+        if (generation !== this.speakGeneration) return false;
+        await this.playWav(wav, generation);
+        if (generation !== this.speakGeneration) return false;
+        if (chunk.pauseSeconds > 0) {
+          await sleep(chunk.pauseSeconds * 1000, undefined, { signal: abortController.signal });
+        }
+      }
+
+      return true;
+    } catch (error) {
+      if (abortController.signal.aborted) return false;
+      throw error;
+    } finally {
+      if (this.speechAbortController === abortController) this.speechAbortController = undefined;
     }
-
-    return true;
   }
 
   stopSpeaking(): void {
     this.speakGeneration += 1;
+    this.speechAbortController?.abort();
+    this.speechAbortController = undefined;
     if (this.activeTts && !this.activeTts.killed) this.activeTts.kill("SIGTERM");
     this.activeTts = undefined;
   }
 
-  private async speakHostedChunks(chunks: SpeechChunk[], generation: number): Promise<boolean> {
+  private async speakHostedChunks(chunks: SpeechChunk[], generation: number, signal: AbortSignal): Promise<boolean> {
     if (chunks.length === 0) return false;
-    let wavPromise = this.synthesize(chunks[0]!.text);
+    let wavPromise = this.synthesize(chunks[0]!.text, signal);
     void wavPromise.catch(() => undefined);
 
     for (let index = 0; index < chunks.length; index += 1) {
@@ -108,13 +124,13 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
 
       const next = chunks[index + 1];
       if (next) {
-        wavPromise = this.synthesize(next.text);
+        wavPromise = this.synthesize(next.text, signal);
         void wavPromise.catch(() => undefined);
       }
 
       await this.playWav(wav, generation);
       if (generation !== this.speakGeneration) return false;
-      if (chunk.pauseSeconds > 0) await sleep(chunk.pauseSeconds * 1000);
+      if (chunk.pauseSeconds > 0) await sleep(chunk.pauseSeconds * 1000, undefined, { signal });
     }
 
     return true;
@@ -186,11 +202,12 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
     return payload.text?.trim() ?? "";
   }
 
-  private async synthesize(text: string): Promise<Buffer> {
+  private async synthesize(text: string, signal?: AbortSignal): Promise<Buffer> {
+    const timeoutSignal = AbortSignal.timeout(this.config.apiTimeoutMs);
     const response = await fetch(this.config.kokoroUrl, {
       method: "POST",
       headers: this.apiHeaders("application/json"),
-      signal: AbortSignal.timeout(this.config.apiTimeoutMs),
+      signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
       body: JSON.stringify({
         model: this.config.kokoroModel,
         input: text,
