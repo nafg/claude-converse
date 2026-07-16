@@ -8,6 +8,7 @@ const configEnv = [
   "CONVERSE_VOICE_PROVIDER",
   "CONVERSE_API_TIMEOUT_MS",
   "CONVERSE_TTS_SPEED",
+  "CONVERSE_TTS_VOICE",
   "CONVERSE_VOICE_WAIT_MS",
   "OPENAI_API_KEY",
   "WHISPER_URL",
@@ -63,6 +64,14 @@ describe("loadConfig", () => {
       kokoroVoice: "alloy",
       kokoroModel: "gpt-4o-mini-tts",
     });
+  });
+
+  it("uses the provider-neutral TTS voice override", () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.CONVERSE_TTS_VOICE = "marin";
+    process.env.KOKORO_VOICE = "legacy-voice";
+
+    expect(loadConfig().kokoroVoice).toBe("marin");
   });
 
   it("permits opting out of OpenAI and retaining the local defaults", () => {

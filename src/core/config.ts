@@ -126,7 +126,7 @@ export const loadConfig = (): ConverseConfig => {
   whisperLanguage: process.env.WHISPER_LANGUAGE ?? "en",
   whisperPrompt: process.env.WHISPER_INITIAL_PROMPT ?? "",
   kokoroUrl,
-  kokoroVoice: process.env.KOKORO_VOICE ?? (provider === "openai" ? "alloy" : "af_heart"),
+  kokoroVoice: process.env.CONVERSE_TTS_VOICE ?? process.env.KOKORO_VOICE ?? (provider === "openai" ? "alloy" : "af_heart"),
   kokoroModel: process.env.KOKORO_MODEL ?? (provider === "openai" ? "gpt-4o-mini-tts" : "kokoro"),
   ttsSpeed,
   voiceWaitMs,
