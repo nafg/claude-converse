@@ -1,7 +1,9 @@
 import net from "node:net";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { Type } from "typebox";
 import { loadConfig } from "../core/config.js";
 import { ConverseService } from "../core/service.js";
+import { VoiceWaitCoordinator } from "./voice-wait.js";
 
 const extractAssistantText = (message: unknown): string => {
   const candidate = message as { role?: string; content?: unknown };
@@ -24,6 +26,7 @@ const extractAssistantText = (message: unknown): string => {
 
 export default function conversePiExtension(pi: ExtensionAPI) {
   const config = loadConfig();
+  const voiceWait = new VoiceWaitCoordinator();
   let latestCtx: ExtensionContext | undefined;
   let service: ConverseService | undefined;
   let claimServer: net.Server | undefined;
@@ -74,6 +77,7 @@ export default function conversePiExtension(pi: ExtensionAPI) {
     const ownerId = ctx.sessionManager.getSessionFile() ?? "pi-session";
     service = new ConverseService(config, ownerId);
     service.on("final-transcript", (entry) => {
+      voiceWait.noteTranscript();
       const text = `Transcribed: ${entry.text}`;
       if (ctx.isIdle()) pi.sendUserMessage(text);
       else pi.sendUserMessage(text, { deliverAs: "steer" });
@@ -91,7 +95,12 @@ export default function conversePiExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async () => {
+    voiceWait.cancel();
     await stopService();
+  });
+
+  pi.on("turn_start", () => {
+    voiceWait.beginTurn();
   });
 
   pi.on("message_end", (event, ctx) => {
@@ -110,6 +119,31 @@ export default function conversePiExtension(pi: ExtensionAPI) {
       })
       .finally(() => speechTasks.delete(task));
     speechTasks.add(task);
+  });
+
+  pi.registerTool({
+    name: "wait_for_voice",
+    label: "Wait for voice",
+    description: "Wait briefly for more voice input when a user message beginning with 'Transcribed:' appears semantically unfinished. Returns immediately if continuation has already arrived during the current turn.",
+    promptSnippet: "Wait for continuation of an unfinished voice transcription",
+    promptGuidelines: [
+      "Use wait_for_voice before answering a 'Transcribed:' user message only when the thought appears unfinished, such as a trailing conjunction, filler, or incomplete sentence.",
+      "When using wait_for_voice, do not tell the user that you are waiting and do not emit an acknowledgement first.",
+      "If wait_for_voice reports that continuation is queued, do not answer the earlier fragment separately; incorporate the queued continuation on the next turn.",
+    ],
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _params, signal) {
+      const outcome = await voiceWait.wait(config.voiceWaitMs, signal);
+      const text = outcome === "continued"
+        ? "More voice input is queued. Incorporate it before answering."
+        : outcome === "timeout"
+          ? "No continuation arrived before the timeout. Respond to the available transcription."
+          : "Voice wait was cancelled.";
+      return {
+        content: [{ type: "text", text }],
+        details: { outcome },
+      };
+    },
   });
 
   pi.registerCommand("converse", {

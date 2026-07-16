@@ -8,7 +8,9 @@
   "engines": {
     "node": ">=20"
   },
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
   "bin": {
     "converse-claude-daemon": "./dist/claude/daemon.js",
     "converse-claude-speak-hook": "./dist/claude/speak-hook.js",
@@ -16,7 +18,9 @@
     "converse-claude-shutdown": "./dist/claude/shutdown.js"
   },
   "pi": {
-    "extensions": ["./dist/pi"]
+    "extensions": [
+      "./pi/index.js"
+    ]
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -24,7 +28,9 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
-  "dependencies": {},
+  "dependencies": {
+    "typebox": "^1.3.6"
+  },
   "devDependencies": {
     "@mariozechner/pi-coding-agent": "0.69.0",
     "@types/node": "^24.0.0",

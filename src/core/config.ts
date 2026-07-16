@@ -26,6 +26,7 @@ export interface ConverseConfig {
   kokoroVoice: string;
   kokoroModel: string;
   ttsSpeed: number;
+  voiceWaitMs: number;
   recorderCommand: string;
   recorderDevice: string;
   recorderAdditionalArgs: string[];
@@ -90,6 +91,10 @@ export const loadConfig = (): ConverseConfig => {
   if (ttsSpeed < 0.25 || ttsSpeed > 4) {
     throw new Error("CONVERSE_TTS_SPEED must be between 0.25 and 4");
   }
+  const voiceWaitMs = intEnv("CONVERSE_VOICE_WAIT_MS", 5_000);
+  if (voiceWaitMs <= 0) {
+    throw new Error("CONVERSE_VOICE_WAIT_MS must be a positive integer");
+  }
   const whisperUrl = process.env.WHISPER_URL ?? (provider === "openai" ? "https://api.openai.com/v1/audio/transcriptions" : "http://localhost:2022/v1/audio/transcriptions");
   const kokoroUrl = process.env.KOKORO_URL ?? (provider === "openai" ? "https://api.openai.com/v1/audio/speech" : "http://localhost:8880/v1/audio/speech");
   if (provider === "openai" && (!isOpenAiUrl(whisperUrl) || !isOpenAiUrl(kokoroUrl))) {
@@ -124,6 +129,7 @@ export const loadConfig = (): ConverseConfig => {
   kokoroVoice: process.env.KOKORO_VOICE ?? (provider === "openai" ? "alloy" : "af_heart"),
   kokoroModel: process.env.KOKORO_MODEL ?? (provider === "openai" ? "gpt-4o-mini-tts" : "kokoro"),
   ttsSpeed,
+  voiceWaitMs,
   recorderCommand: process.env.CONVERSE_RECORDER_COMMAND ?? "parecord",
   recorderDevice: process.env.CONVERSE_RECORDER_DEVICE ?? "default",
   recorderAdditionalArgs: stringListEnv("CONVERSE_RECORDER_ARGS"),

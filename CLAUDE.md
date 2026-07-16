@@ -42,7 +42,7 @@ The Claude daemon starts explicitly on `/converse on` and shuts down explicitly 
 
 Pi uses the same shared service object directly in-process.
 
-There is no Pi-side daemon. The extension binds the same configured port only to preserve global exclusivity with Claude.
+There is no Pi-side daemon. The extension binds the same configured port only to preserve global exclusivity with Claude. It also registers `wait_for_voice`, which the model can call when a `Transcribed:` message is semantically unfinished; continuation wakes the tool immediately, while a bounded timeout prevents indefinite silence.
 
 ## Exclusivity
 

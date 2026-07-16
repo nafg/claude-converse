@@ -67,6 +67,7 @@ Common variables:
 - `KOKORO_VOICE` — defaults to `alloy` on OpenAI or `af_heart` locally
 - `KOKORO_MODEL` — defaults to `gpt-4o-mini-tts` on OpenAI or `kokoro` locally
 - `CONVERSE_TTS_SPEED` — OpenAI speech speed from `0.25` to `4`; defaults to `1.25` for a more conversational pace
+- `CONVERSE_VOICE_WAIT_MS` — maximum time the Pi model's `wait_for_voice` tool waits for continuation of an unfinished thought; default `5000`
 - `CONVERSE_RECORDER_COMMAND` — default `parecord`
 - `CONVERSE_RECORDER_DEVICE` — default `default` (used only by the `arecord` fallback)
 - `CONVERSE_PLAYER_COMMAND` — default `paplay`

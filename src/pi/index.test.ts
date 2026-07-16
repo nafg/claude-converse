@@ -33,6 +33,7 @@ describe("Pi converse extension", () => {
 
     const handlers = new Map<string, Array<(event: unknown, ctx: unknown) => unknown>>();
     let converseCommand: { handler(args: string, ctx: unknown): Promise<void> } | undefined;
+    let waitTool: { name: string; promptGuidelines?: string[] } | undefined;
     const pi = {
       on(name: string, handler: (event: unknown, ctx: unknown) => unknown) {
         const current = handlers.get(name) ?? [];
@@ -41,6 +42,9 @@ describe("Pi converse extension", () => {
       },
       registerCommand(name: string, command: typeof converseCommand) {
         if (name === "converse") converseCommand = command;
+      },
+      registerTool(tool: typeof waitTool) {
+        if (tool?.name === "wait_for_voice") waitTool = tool;
       },
       sendUserMessage: vi.fn(),
     };
@@ -67,6 +71,7 @@ describe("Pi converse extension", () => {
 
     try {
       conversePiExtension(pi as never);
+      expect(waitTool?.promptGuidelines?.join(" ")).toMatch(/do not tell the user that you are waiting/i);
       await converseCommand!.handler("on", ctx);
       const messageEnd = handlers.get("message_end")![0]!;
       let settled = false;
