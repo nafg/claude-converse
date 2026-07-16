@@ -46,4 +46,28 @@ describe("ConverseService API authentication", () => {
       'OpenAI transcription request failed: 429: {"error":{"message":"Rate limit reached"}}',
     );
   });
+
+  it("does not synthesize text removed entirely by speech cleanup", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new ConverseService({ ...loadConfig(), voiceProvider: "openai", apiKey: "test-key" }, "test-owner");
+
+    await expect(service.speak("---", "test-owner")).resolves.toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("prefetches the next hosted sentence before playing the current one", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(Buffer.from("wav"), { status: 200 })));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new ConverseService({ ...loadConfig(), voiceProvider: "openai", apiKey: "test-key" }, "test-owner");
+    let requestsAtFirstPlayback = 0;
+    (service as unknown as { playWav: () => Promise<void> }).playWav = async () => {
+      if (requestsAtFirstPlayback === 0) requestsAtFirstPlayback = fetchMock.mock.calls.length;
+    };
+
+    await service.speak("First sentence. Second sentence.", "test-owner");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(requestsAtFirstPlayback).toBe(2);
+  });
 });

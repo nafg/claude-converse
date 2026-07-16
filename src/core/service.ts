@@ -4,7 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { ConverseConfig } from "./config.js";
 import { encodeWav } from "./wav.js";
 import { hashText, speakableText, splitSpeechChunks } from "./text.js";
-import type { TranscriptEntry } from "./types.js";
+import type { SpeechChunk, TranscriptEntry } from "./types.js";
 import { EnergyVad, type VadEmission } from "./vad.js";
 
 interface ServiceEvents {
@@ -75,7 +75,10 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
     this.stopSpeaking();
     const generation = ++this.speakGeneration;
 
-    for (const chunk of splitSpeechChunks(source)) {
+    const chunks = splitSpeechChunks(source);
+    if (this.config.voiceProvider === "openai") return this.speakHostedChunks(chunks, generation);
+
+    for (const chunk of chunks) {
       if (generation !== this.speakGeneration) return false;
       const wav = await this.synthesize(chunk.text);
       if (generation !== this.speakGeneration) return false;
@@ -91,6 +94,30 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
     this.speakGeneration += 1;
     if (this.activeTts && !this.activeTts.killed) this.activeTts.kill("SIGTERM");
     this.activeTts = undefined;
+  }
+
+  private async speakHostedChunks(chunks: SpeechChunk[], generation: number): Promise<boolean> {
+    if (chunks.length === 0) return false;
+    let wavPromise = this.synthesize(chunks[0]!.text);
+    void wavPromise.catch(() => undefined);
+
+    for (let index = 0; index < chunks.length; index += 1) {
+      const chunk = chunks[index]!;
+      const wav = await wavPromise;
+      if (generation !== this.speakGeneration) return false;
+
+      const next = chunks[index + 1];
+      if (next) {
+        wavPromise = this.synthesize(next.text);
+        void wavPromise.catch(() => undefined);
+      }
+
+      await this.playWav(wav, generation);
+      if (generation !== this.speakGeneration) return false;
+      if (chunk.pauseSeconds > 0) await sleep(chunk.pauseSeconds * 1000);
+    }
+
+    return true;
   }
 
   private onRecorderData(chunk: Buffer): void {
