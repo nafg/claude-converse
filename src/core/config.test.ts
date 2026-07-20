@@ -244,6 +244,34 @@ describe("loadConfig", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  it("selects whisper.cpp explicitly with local defaults and no API key", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
+    const path = join(directory, "config.json");
+    writeFileSync(path, JSON.stringify({
+      sttProvider: "whisper.cpp",
+      sttApiKey: "must-not-be-used",
+      ttsProvider: "local",
+      whisperModel: "small.en-q5_0",
+      whisperLanguage: "en",
+      whisperPrompt: "Software development vocabulary",
+    }));
+
+    expect(loadConfig(path)).toMatchObject({
+      sttProvider: "whisper.cpp",
+      ttsProvider: "local",
+      voiceProvider: "local",
+      sttApiKey: undefined,
+      whisperUrl: "http://localhost:2022/v1/audio/transcriptions",
+      whisperModel: "small.en-q5_0",
+      whisperLanguage: "en",
+      whisperPrompt: "Software development vocabulary",
+    });
+
+    writeFileSync(path, JSON.stringify({ sttProvider: "whisper.cpp", ttsProvider: "local" }));
+    expect(loadConfig(path).whisperModel).toBe("base.en");
+    rmSync(directory, { recursive: true, force: true });
+  });
+
   it("reports malformed, unknown, and incorrectly typed file settings", () => {
     const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
     const path = join(directory, "config.json");

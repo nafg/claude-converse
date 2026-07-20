@@ -157,7 +157,11 @@ export default function conversePiExtension(pi: ExtensionAPI) {
       }
       try {
         await startService(ctx);
-        const sttBackend = config.sttProvider === "openai" ? "OpenAI" : "local Whisper";
+        const sttBackend = config.sttProvider === "openai"
+          ? "OpenAI"
+          : config.sttProvider === "whisper.cpp"
+            ? "whisper.cpp"
+            : "local Whisper";
         const ttsBackend = config.ttsProvider === "openai" ? "OpenAI" : "local Kokoro";
         ctx.ui.notify(`voice mode on (STT: ${sttBackend}; TTS: ${ttsBackend})`, "info");
       } catch (error) {

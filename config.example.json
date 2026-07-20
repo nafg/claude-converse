@@ -1,12 +1,12 @@
 {
-  "sttProvider": "local",
+  "sttProvider": "whisper.cpp",
   "sttApiKey": "",
   "ttsProvider": "local",
   "ttsApiKey": "",
   "apiTimeoutMs": 60000,
 
   "whisperUrl": "http://localhost:2022/v1/audio/transcriptions",
-  "whisperModel": "base",
+  "whisperModel": "base.en",
   "whisperLanguage": "en",
   "whisperPrompt": "",
 

@@ -73,23 +73,40 @@ STT and TTS are selected separately. OpenAI uses `gpt-4o-transcribe` for STT and
 }
 ```
 
-Reverse the two providers and set `ttsApiKey` for local transcription with OpenAI speech. Setting both providers to `local` keeps all audio processing on this computer; setting both to `openai` keeps it off this computer. Each OpenAI key is attached only to its own request, and OpenAI providers reject endpoints other than HTTPS URLs on `api.openai.com`.
+Reverse the two providers and set `ttsApiKey` for local transcription with OpenAI speech. Setting both providers to local implementations keeps all audio processing on this computer; setting both to `openai` keeps it off this computer. Each OpenAI key is attached only to its own request, and OpenAI providers reject endpoints other than HTTPS URLs on `api.openai.com`.
 
-The former `voiceProvider` and shared `apiKey` file settings remain accepted for existing installations. Likewise, when no file setting chooses either provider, `CONVERSE_VOICE_PROVIDER` and `OPENAI_API_KEY` retain their coupled legacy behavior.
+#### whisper.cpp transcription
+
+Select the existing OpenAI-compatible `whisper-server` explicitly with:
+
+```json
+{
+  "sttProvider": "whisper.cpp",
+  "whisperUrl": "http://localhost:2022/v1/audio/transcriptions",
+  "whisperModel": "base.en",
+  "whisperLanguage": "en",
+  "whisperPrompt": "Programming and software-development vocabulary",
+  "ttsProvider": "local"
+}
+```
+
+The provider never attaches an API key. The server process still controls which model weights are actually loaded; keep its startup model aligned with `whisperModel` if the server uses the request field. For English-only dictation, `base.en` is a practical starting point. `small.en` is larger and may trade additional resource use and latency for accuracy. Quantized variants such as `base.en-q5_0` or `small.en-q5_0` reduce model size and can change speed or accuracy depending on the machine, so benchmark them locally rather than assuming one is faster.
+
+`local` remains accepted as the legacy local-STT alias. The former `voiceProvider` and shared `apiKey` file settings also remain accepted for existing installations. Likewise, when no file setting chooses either provider, `CONVERSE_VOICE_PROVIDER` and `OPENAI_API_KEY` retain their coupled legacy behavior.
 
 Legacy environment variables and their corresponding file settings:
 
 - `CONVERSE_HOST` → `host` — default `127.0.0.1`
 - `CONVERSE_PORT` → `port` — default `45839`
-- `CONVERSE_STT_PROVIDER` → `sttProvider` — independently selects `openai` or `local` transcription
+- `CONVERSE_STT_PROVIDER` → `sttProvider` — independently selects `openai`, `whisper.cpp`, or the compatibility alias `local` for transcription
 - `CONVERSE_TTS_PROVIDER` → `ttsProvider` — independently selects `openai` or `local` speech
 - `OPENAI_STT_API_KEY` → `sttApiKey` — used only for OpenAI transcription
 - `OPENAI_TTS_API_KEY` → `ttsApiKey` — used only for OpenAI speech
 - `CONVERSE_VOICE_PROVIDER` → legacy `voiceProvider` — coupled fallback for both providers
 - `OPENAI_API_KEY` → legacy `apiKey` — shared fallback key for existing installations
 - `CONVERSE_API_TIMEOUT_MS` → `apiTimeoutMs` — maximum time for each transcription or speech request; default `60000`
-- `WHISPER_URL` → `whisperUrl` — transcription URL; defaults to OpenAI or `http://localhost:2022/v1/audio/transcriptions` for local. OpenAI mode accepts only `https://api.openai.com` URLs, so its key cannot be sent to an arbitrary override.
-- `WHISPER_MODEL` → `whisperModel` — defaults to `gpt-4o-transcribe` on OpenAI or `base` locally
+- `WHISPER_URL` → `whisperUrl` — transcription URL; defaults to OpenAI or `http://localhost:2022/v1/audio/transcriptions` for local providers. OpenAI mode accepts only `https://api.openai.com` URLs, so its key cannot be sent to an arbitrary override.
+- `WHISPER_MODEL` → `whisperModel` — defaults to `gpt-4o-transcribe` on OpenAI, `base.en` for explicit `whisper.cpp`, or `base` for legacy `local`
 - `WHISPER_LANGUAGE` → `whisperLanguage` — default `en`
 - `WHISPER_INITIAL_PROMPT` → `whisperPrompt` — default empty
 - `KOKORO_URL` → `kokoroUrl` — speech URL; defaults to OpenAI or `http://localhost:8880/v1/audio/speech` for local

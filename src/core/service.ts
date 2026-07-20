@@ -230,7 +230,13 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
 
   private async requestError(operation: "transcription" | "speech", response: Response): Promise<Error> {
     const provider = operation === "transcription" ? this.config.sttProvider : this.config.ttsProvider;
-    const backend = provider === "openai" ? "OpenAI" : operation === "transcription" ? "Whisper" : "Kokoro";
+    const backend = provider === "openai"
+      ? "OpenAI"
+      : provider === "whisper.cpp"
+        ? "whisper.cpp"
+        : operation === "transcription"
+          ? "Whisper"
+          : "Kokoro";
     const detail = (await response.text()).trim().replace(/\s+/g, " ").slice(0, 500);
     return new Error(`${backend} ${operation} request failed: ${response.status}${detail ? `: ${detail}` : ""}`);
   }

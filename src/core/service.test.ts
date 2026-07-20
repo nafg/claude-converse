@@ -22,6 +22,19 @@ const serviceWithKey = (): ServiceInternals => {
   return service as unknown as ServiceInternals;
 };
 
+const whisperCppConfig = () => ({
+  ...openAiConfig(),
+  sttProvider: "whisper.cpp" as const,
+  ttsProvider: "local" as const,
+  voiceProvider: "local" as const,
+  sttApiKey: undefined,
+  ttsApiKey: undefined,
+  whisperUrl: "http://localhost:2022/v1/audio/transcriptions",
+  whisperModel: "base.en",
+  whisperLanguage: "en",
+  whisperPrompt: "Programming terms",
+});
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("ConverseService API authentication", () => {
@@ -34,6 +47,31 @@ describe("ConverseService API authentication", () => {
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(new Headers(request.headers).get("authorization")).toBe("Bearer stt-key");
     expect(request.body).toBeInstanceOf(FormData);
+  });
+
+  it("sends whisper.cpp its configurable multipart fields without authorization", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ text: "hello" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new ConverseService(whisperCppConfig(), "test-owner") as unknown as ServiceInternals;
+
+    await service.transcribe(Buffer.alloc(960));
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://localhost:2022/v1/audio/transcriptions");
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(request.headers).get("authorization")).toBeNull();
+    const form = request.body as FormData;
+    expect(form.get("model")).toBe("base.en");
+    expect(form.get("language")).toBe("en");
+    expect(form.get("prompt")).toBe("Programming terms");
+  });
+
+  it("identifies whisper.cpp transcription failures", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("model unavailable", { status: 503 })));
+    const service = new ConverseService(whisperCppConfig(), "test-owner") as unknown as ServiceInternals;
+
+    await expect(service.transcribe(Buffer.alloc(960))).rejects.toThrow(
+      "whisper.cpp transcription request failed: 503: model unavailable",
+    );
   });
 
   it("sends only the TTS API key with JSON speech requests", async () => {

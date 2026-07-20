@@ -19,8 +19,8 @@ export interface ConverseConfig {
   statusWindowSeconds: number;
   statusPrefix: string;
   statusSeparator: string;
-  sttProvider: "local" | "openai";
-  ttsProvider: "local" | "openai";
+  sttProvider: SttProvider;
+  ttsProvider: TtsProvider;
   sttApiKey?: string;
   ttsApiKey?: string;
   /** Compatibility summary for callers that used the formerly coupled provider. */
@@ -46,12 +46,14 @@ export interface ConverseConfig {
   port: number;
 }
 
-type AudioProvider = "local" | "openai";
+export type SttProvider = "local" | "openai" | "whisper.cpp";
+export type TtsProvider = "local" | "openai";
+type LegacyAudioProvider = "local" | "openai";
 type FileConfig = Partial<Omit<ConverseConfig, "voiceProvider" | "apiKey">> & {
-  voiceProvider?: AudioProvider;
+  voiceProvider?: LegacyAudioProvider;
   apiKey?: string;
 };
-type ValueKind = "number" | "string" | "string[]" | "provider";
+type ValueKind = "number" | "string" | "string[]" | "stt-provider" | "tts-provider" | "legacy-provider";
 
 const fileConfigKinds: Record<keyof ConverseConfig, ValueKind> = {
   sampleRate: "number",
@@ -70,11 +72,11 @@ const fileConfigKinds: Record<keyof ConverseConfig, ValueKind> = {
   statusWindowSeconds: "number",
   statusPrefix: "string",
   statusSeparator: "string",
-  sttProvider: "provider",
-  ttsProvider: "provider",
+  sttProvider: "stt-provider",
+  ttsProvider: "tts-provider",
   sttApiKey: "string",
   ttsApiKey: "string",
-  voiceProvider: "provider",
+  voiceProvider: "legacy-provider",
   apiKey: "string",
   apiTimeoutMs: "number",
   whisperUrl: "string",
@@ -123,9 +125,11 @@ const readFileConfig = (path: string): FileConfig => {
     if (!kind) throw new Error(`Unknown Converse config setting ${key} in ${path}`);
     const valid = kind === "string[]"
       ? Array.isArray(item) && item.every((entry) => typeof entry === "string")
-      : kind === "provider"
-        ? item === "local" || item === "openai"
-        : typeof item === kind && (kind !== "number" || Number.isFinite(item));
+      : kind === "stt-provider"
+        ? item === "local" || item === "openai" || item === "whisper.cpp"
+        : kind === "tts-provider" || kind === "legacy-provider"
+          ? item === "local" || item === "openai"
+          : typeof item === kind && (kind !== "number" || Number.isFinite(item));
     if (!valid) throw new Error(`Converse config setting ${key} in ${path} must be ${kind}`);
   }
   return config as FileConfig;
@@ -150,15 +154,22 @@ const stringListEnv = (name: string): string[] => {
   return value ? value.split(/\s+/g) : [];
 };
 
-const providerEnv = (name: string): AudioProvider | undefined => {
+const legacyProviderEnv = (name: string): LegacyAudioProvider | undefined => {
   const configured = process.env[name]?.trim().toLowerCase();
   if (!configured) return undefined;
   if (configured === "local" || configured === "openai") return configured;
   throw new Error(`${name}=${configured} is unsupported; use local or openai`);
 };
 
-const legacyVoiceProvider = (): AudioProvider =>
-  providerEnv("CONVERSE_VOICE_PROVIDER") ?? (process.env.OPENAI_API_KEY?.trim() ? "openai" : "local");
+const sttProviderEnv = (): SttProvider | undefined => {
+  const configured = process.env.CONVERSE_STT_PROVIDER?.trim().toLowerCase();
+  if (!configured) return undefined;
+  if (configured === "local" || configured === "openai" || configured === "whisper.cpp") return configured;
+  throw new Error(`CONVERSE_STT_PROVIDER=${configured} is unsupported; use local, whisper.cpp, or openai`);
+};
+
+const legacyVoiceProvider = (): LegacyAudioProvider =>
+  legacyProviderEnv("CONVERSE_VOICE_PROVIDER") ?? (process.env.OPENAI_API_KEY?.trim() ? "openai" : "local");
 
 const isOpenAiUrl = (value: string): boolean => {
   try {
@@ -172,8 +183,8 @@ const isOpenAiUrl = (value: string): boolean => {
 export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
   const file = readFileConfig(path);
   const environmentProvider = legacyVoiceProvider();
-  const sttProvider = file.sttProvider ?? file.voiceProvider ?? providerEnv("CONVERSE_STT_PROVIDER") ?? environmentProvider;
-  const ttsProvider = file.ttsProvider ?? file.voiceProvider ?? providerEnv("CONVERSE_TTS_PROVIDER") ?? environmentProvider;
+  const sttProvider = file.sttProvider ?? file.voiceProvider ?? sttProviderEnv() ?? environmentProvider;
+  const ttsProvider = file.ttsProvider ?? file.voiceProvider ?? legacyProviderEnv("CONVERSE_TTS_PROVIDER") ?? environmentProvider;
   const environmentApiKey = process.env.OPENAI_API_KEY?.trim();
   const sttApiKey = sttProvider === "openai"
     ? file.sttApiKey ?? file.apiKey ?? process.env.OPENAI_STT_API_KEY?.trim() ?? environmentApiKey
@@ -201,7 +212,11 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
     throw new Error("kokoroUrl must use https://api.openai.com when ttsProvider is openai");
   }
 
-  const voiceProvider = sttProvider === ttsProvider ? sttProvider : "mixed";
+  const voiceProvider = sttProvider === "openai" && ttsProvider === "openai"
+    ? "openai"
+    : sttProvider !== "openai" && ttsProvider !== "openai"
+      ? "local"
+      : "mixed";
   const apiKey = sttProvider === "openai" && ttsProvider === "openai" && sttApiKey === ttsApiKey ? sttApiKey : undefined;
 
   return {
@@ -229,7 +244,7 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
     apiKey,
     apiTimeoutMs,
     whisperUrl,
-    whisperModel: file.whisperModel ?? process.env.WHISPER_MODEL ?? (sttProvider === "openai" ? "gpt-4o-transcribe" : "base"),
+    whisperModel: file.whisperModel ?? process.env.WHISPER_MODEL ?? (sttProvider === "openai" ? "gpt-4o-transcribe" : sttProvider === "whisper.cpp" ? "base.en" : "base"),
     whisperLanguage: file.whisperLanguage ?? process.env.WHISPER_LANGUAGE ?? "en",
     whisperPrompt: file.whisperPrompt ?? process.env.WHISPER_INITIAL_PROMPT ?? "",
     kokoroUrl,
