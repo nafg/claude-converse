@@ -244,6 +244,37 @@ describe("loadConfig", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  it("selects Kokoro explicitly with local defaults and no API key", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
+    const path = join(directory, "config.json");
+    writeFileSync(path, JSON.stringify({
+      sttProvider: "whisper.cpp",
+      ttsProvider: "kokoro",
+      ttsApiKey: "must-not-be-used",
+      kokoroUrl: "http://127.0.0.1:9999/v1/audio/speech",
+      kokoroModel: "kokoro-v1",
+      kokoroVoice: "af_sky",
+    }));
+
+    expect(loadConfig(path)).toMatchObject({
+      sttProvider: "whisper.cpp",
+      ttsProvider: "kokoro",
+      voiceProvider: "local",
+      ttsApiKey: undefined,
+      kokoroUrl: "http://127.0.0.1:9999/v1/audio/speech",
+      kokoroModel: "kokoro-v1",
+      kokoroVoice: "af_sky",
+    });
+
+    writeFileSync(path, JSON.stringify({ sttProvider: "whisper.cpp", ttsProvider: "kokoro" }));
+    expect(loadConfig(path)).toMatchObject({
+      kokoroUrl: "http://localhost:8880/v1/audio/speech",
+      kokoroModel: "kokoro",
+      kokoroVoice: "af_heart",
+    });
+    rmSync(directory, { recursive: true, force: true });
+  });
+
   it("selects whisper.cpp explicitly with local defaults and no API key", () => {
     const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
     const path = join(directory, "config.json");

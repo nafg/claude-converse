@@ -234,9 +234,11 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
       ? "OpenAI"
       : provider === "whisper.cpp"
         ? "whisper.cpp"
-        : operation === "transcription"
-          ? "Whisper"
-          : "Kokoro";
+        : provider === "kokoro"
+          ? "Kokoro"
+          : operation === "transcription"
+            ? "Whisper"
+            : "Kokoro";
     const detail = (await response.text()).trim().replace(/\s+/g, " ").slice(0, 500);
     return new Error(`${backend} ${operation} request failed: ${response.status}${detail ? `: ${detail}` : ""}`);
   }

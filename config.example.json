@@ -1,7 +1,7 @@
 {
   "sttProvider": "whisper.cpp",
   "sttApiKey": "",
-  "ttsProvider": "local",
+  "ttsProvider": "kokoro",
   "ttsApiKey": "",
   "apiTimeoutMs": 60000,
 

@@ -35,6 +35,14 @@ const whisperCppConfig = () => ({
   whisperPrompt: "Programming terms",
 });
 
+const kokoroConfig = () => ({
+  ...whisperCppConfig(),
+  ttsProvider: "kokoro" as const,
+  kokoroUrl: "http://localhost:8880/v1/audio/speech",
+  kokoroModel: "kokoro",
+  kokoroVoice: "af_heart",
+});
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("ConverseService API authentication", () => {
@@ -87,6 +95,35 @@ describe("ConverseService API authentication", () => {
     expect(JSON.parse(request.body as string)).toMatchObject({ speed: 1.25 });
   });
 
+  it("sends Kokoro its configurable speech request without authorization", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(Buffer.from("wav"), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new ConverseService(kokoroConfig(), "test-owner") as unknown as ServiceInternals;
+
+    await service.synthesize("hello");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://localhost:8880/v1/audio/speech");
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const headers = new Headers(request.headers);
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("content-type")).toBe("application/json");
+    expect(JSON.parse(request.body as string)).toEqual({
+      model: "kokoro",
+      input: "hello",
+      voice: "af_heart",
+      response_format: "wav",
+    });
+  });
+
+  it("identifies Kokoro speech failures", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("model unavailable", { status: 503 })));
+    const service = new ConverseService(kokoroConfig(), "test-owner") as unknown as ServiceInternals;
+
+    await expect(service.synthesize("hello")).rejects.toThrow(
+      "Kokoro speech request failed: 503: model unavailable",
+    );
+  });
+
   it("identifies the backend and preserves a failed API response's detail", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { message: "Rate limit reached" } }), { status: 429 })));
 
@@ -118,6 +155,34 @@ describe("ConverseService API authentication", () => {
     service.stopSpeaking();
 
     expect(requestSignal?.aborted).toBe(true);
+  });
+
+  it("aborts in-flight Kokoro synthesis when speaking stops", async () => {
+    let requestSignal: AbortSignal | undefined;
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      requestSignal = init.signal as AbortSignal;
+      return new Promise<Response>(() => undefined);
+    }));
+    const service = new ConverseService(kokoroConfig(), "test-owner");
+
+    void service.speak("Still synthesizing.", "test-owner");
+    await vi.waitFor(() => expect(requestSignal).toBeDefined());
+    service.stopSpeaking();
+
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  it("keeps long Kokoro replies chunked through the common service path", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(Buffer.from("wav"), { status: 200 })));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new ConverseService(kokoroConfig(), "test-owner");
+    (service as unknown as { playWav: () => Promise<void> }).playWav = async () => undefined;
+
+    await service.speak("First sentence. Second sentence.", "test-owner");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const spoken = fetchMock.mock.calls.map((call) => JSON.parse((call[1] as RequestInit).body as string).input);
+    expect(spoken).toEqual(["First sentence.", "Second sentence."]);
   });
 
   it("prefetches the next hosted sentence before playing the current one", async () => {

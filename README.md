@@ -7,7 +7,7 @@ This branch rebuilds Converse around a shared **TypeScript voice core**:
 - **Claude adapter**: runs a localhost HTTP daemon
 - **Pi adapter**: runs the same service in-process inside the extension
 - **Linux audio tools**: microphone capture via `parecord`, playback via `paplay` by default
-- **Independent STT/TTS backends**: mix local Whisper/Kokoro HTTP with OpenAI's hosted Audio API
+- **Independent STT/TTS backends**: mix local whisper.cpp/Kokoro HTTP with OpenAI's hosted Audio API
 
 ## Current architecture
 
@@ -63,13 +63,13 @@ Changes are loaded when the process starts: use `/converse off` followed by `/co
 
 ### Independent audio providers
 
-STT and TTS are selected separately. OpenAI uses `gpt-4o-transcribe` for STT and `gpt-4o-mini-tts` with the `alloy` voice for TTS by default. For hosted transcription with local speech, configure:
+STT and TTS are selected separately. OpenAI uses `gpt-4o-transcribe` for STT and `gpt-4o-mini-tts` with the `alloy` voice for TTS by default. For hosted transcription with local Kokoro speech, configure:
 
 ```json
 {
   "sttProvider": "openai",
   "sttApiKey": "...",
-  "ttsProvider": "local"
+  "ttsProvider": "kokoro"
 }
 ```
 
@@ -94,12 +94,28 @@ The provider never attaches an API key. The server process still controls which 
 
 `local` remains accepted as the legacy local-STT alias. The former `voiceProvider` and shared `apiKey` file settings also remain accepted for existing installations. Likewise, when no file setting chooses either provider, `CONVERSE_VOICE_PROVIDER` and `OPENAI_API_KEY` retain their coupled legacy behavior.
 
+#### Kokoro speech
+
+Select the existing OpenAI-compatible Kokoro server explicitly with:
+
+```json
+{
+  "sttProvider": "whisper.cpp",
+  "ttsProvider": "kokoro",
+  "kokoroUrl": "http://localhost:8880/v1/audio/speech",
+  "kokoroModel": "kokoro",
+  "kokoroVoice": "af_heart"
+}
+```
+
+Kokoro requests are local and never receive an API key. Converse sends one WAV request per speech chunk, which keeps long responses understandable and preserves cancellation between sentences. Speaking over playback follows the same VAD barge-in path as every other TTS provider and aborts in-flight synthesis as well as the active player. `local` remains accepted as the legacy Kokoro-compatible TTS alias.
+
 Legacy environment variables and their corresponding file settings:
 
 - `CONVERSE_HOST` → `host` — default `127.0.0.1`
 - `CONVERSE_PORT` → `port` — default `45839`
 - `CONVERSE_STT_PROVIDER` → `sttProvider` — independently selects `openai`, `whisper.cpp`, or the compatibility alias `local` for transcription
-- `CONVERSE_TTS_PROVIDER` → `ttsProvider` — independently selects `openai` or `local` speech
+- `CONVERSE_TTS_PROVIDER` → `ttsProvider` — independently selects `openai`, `kokoro`, or the compatibility alias `local` for speech
 - `OPENAI_STT_API_KEY` → `sttApiKey` — used only for OpenAI transcription
 - `OPENAI_TTS_API_KEY` → `ttsApiKey` — used only for OpenAI speech
 - `CONVERSE_VOICE_PROVIDER` → legacy `voiceProvider` — coupled fallback for both providers
@@ -109,7 +125,7 @@ Legacy environment variables and their corresponding file settings:
 - `WHISPER_MODEL` → `whisperModel` — defaults to `gpt-4o-transcribe` on OpenAI, `base.en` for explicit `whisper.cpp`, or `base` for legacy `local`
 - `WHISPER_LANGUAGE` → `whisperLanguage` — default `en`
 - `WHISPER_INITIAL_PROMPT` → `whisperPrompt` — default empty
-- `KOKORO_URL` → `kokoroUrl` — speech URL; defaults to OpenAI or `http://localhost:8880/v1/audio/speech` for local
+- `KOKORO_URL` → `kokoroUrl` — speech URL; defaults to OpenAI or `http://localhost:8880/v1/audio/speech` for Kokoro-compatible providers
 - `CONVERSE_TTS_VOICE` → `kokoroVoice` — defaults to `alloy` on OpenAI or `af_heart` locally (`KOKORO_VOICE` remains a compatibility fallback)
 - `KOKORO_MODEL` → `kokoroModel` — defaults to `gpt-4o-mini-tts` on OpenAI or `kokoro` locally
 - `CONVERSE_TTS_SPEED` → `ttsSpeed` — OpenAI speech speed from `0.25` to `4`; defaults to `1.25` for a more conversational pace
