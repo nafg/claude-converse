@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +8,13 @@ import { ConverseService } from "./service.js";
 type ServiceInternals = {
   transcribe(audio: Buffer): Promise<string>;
   synthesize(text: string): Promise<Buffer>;
+};
+
+type LifecycleInternals = ServiceInternals & {
+  handleVadEmission(emission: { type: "final"; utteranceId: number; audio: Buffer }, generation: number): Promise<void>;
+  lifecycleGeneration: number;
+  recorder?: import("node:child_process").ChildProcess;
+  recorderStopGraceMs: number;
 };
 
 const openAiConfig = () => ({
@@ -589,5 +596,83 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(requestsAtFirstPlayback).toBe(2);
+  });
+});
+
+describe("ConverseService lifecycle", () => {
+  it("aborts pending HTTP transcription when stopped", async () => {
+    let requestSignal: AbortSignal | undefined;
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      requestSignal = init.signal as AbortSignal;
+      return new Promise<Response>((_resolve, reject) => {
+        requestSignal!.addEventListener("abort", () => reject(requestSignal!.reason), { once: true });
+      });
+    }));
+    const concrete = new ConverseService(whisperCppConfig(), "test-owner");
+    const service = concrete as unknown as LifecycleInternals;
+
+    const pending = service.transcribe(Buffer.alloc(960));
+    await vi.waitFor(() => expect(requestSignal).toBeDefined());
+    await concrete.stop();
+
+    expect(requestSignal?.aborted).toBe(true);
+    await expect(pending).rejects.toBeDefined();
+  });
+
+  it("does not emit a transcript that resolves after stop", async () => {
+    let resolveFetch: ((response: Response) => void) | undefined;
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() => new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    })));
+    const concrete = new ConverseService(whisperCppConfig(), "test-owner");
+    const service = concrete as unknown as LifecycleInternals;
+    const transcripts: string[] = [];
+    concrete.on("final-transcript", (entry) => transcripts.push(entry.text));
+
+    const pending = service.handleVadEmission(
+      { type: "final", utteranceId: 1, audio: Buffer.alloc(960) },
+      service.lifecycleGeneration,
+    );
+    await vi.waitFor(() => expect(resolveFetch).toBeDefined());
+    await concrete.stop();
+    resolveFetch!(new Response(JSON.stringify({ text: "too late" }), { status: 200 }));
+    await pending;
+
+    expect(transcripts).toEqual([]);
+  });
+
+  it.each([
+    { ignoreTerm: false, expectedSignal: null },
+    { ignoreTerm: true, expectedSignal: "SIGKILL" },
+  ])("awaits recorder shutdown and uses the bounded kill fallback: $ignoreTerm", async ({ ignoreTerm, expectedSignal }) => {
+    const directory = mkdtempSync(join(tmpdir(), "converse-recorder-stop-test-"));
+    const recorderPath = join(directory, "fake-recorder.mjs");
+    const readyPath = join(directory, "ready");
+    writeFileSync(recorderPath, `#!/usr/bin/env node\nimport { writeFileSync } from "node:fs";\n${ignoreTerm ? "process.on(\"SIGTERM\", () => {});" : "process.on(\"SIGTERM\", () => process.exit(0));"}\nwriteFileSync(${JSON.stringify(readyPath)}, "ready");\nsetInterval(() => {}, 1000);\n`);
+    chmodSync(recorderPath, 0o755);
+    const concrete = new ConverseService({ ...whisperCppConfig(), recorderCommand: recorderPath }, "test-owner");
+    const service = concrete as unknown as LifecycleInternals;
+    service.recorderStopGraceMs = 25;
+
+    try {
+      await concrete.start();
+      await vi.waitFor(() => expect(existsSync(readyPath)).toBe(true));
+      const recorder = service.recorder!;
+      await concrete.stop();
+
+      expect(recorder.exitCode !== null || recorder.signalCode !== null).toBe(true);
+      expect(recorder.signalCode).toBe(expectedSignal);
+
+      if (!ignoreTerm) {
+        await concrete.start();
+        const restartedRecorder = service.recorder!;
+        expect(restartedRecorder.pid).not.toBe(recorder.pid);
+        await concrete.stop();
+        expect(restartedRecorder.exitCode !== null || restartedRecorder.signalCode !== null).toBe(true);
+      }
+    } finally {
+      await concrete.stop();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

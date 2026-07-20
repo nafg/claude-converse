@@ -277,6 +277,7 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
   const apiTimeoutMs = file.apiTimeoutMs ?? intEnv("CONVERSE_API_TIMEOUT_MS", 60_000);
   const ttsSpeed = file.ttsSpeed ?? floatEnv("CONVERSE_TTS_SPEED", 1.25);
   const voiceWaitMs = file.voiceWaitMs ?? intEnv("CONVERSE_VOICE_WAIT_MS", 5_000);
+  const whisperPrompt = file.whisperPrompt ?? process.env.WHISPER_INITIAL_PROMPT ?? "";
   const whisperUrl = file.whisperUrl ?? process.env.WHISPER_URL ?? (sttProvider === "openai"
     ? "https://api.openai.com/v1/audio/transcriptions"
     : sttProvider === "groq"
@@ -296,7 +297,7 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
   if (sttProvider === "moonshine" && file.sttApiKey !== undefined) {
     throw new Error("sttApiKey is unsupported when sttProvider is moonshine; Moonshine runs as a local child process");
   }
-  if (sttProvider === "moonshine" && file.whisperPrompt?.trim()) {
+  if (sttProvider === "moonshine" && whisperPrompt.trim()) {
     throw new Error("whisperPrompt is unsupported when sttProvider is moonshine");
   }
   if (file.moonshinePythonCommand !== undefined && !file.moonshinePythonCommand.trim()) {
@@ -388,7 +389,7 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
             ? "base.en"
             : "base"),
     whisperLanguage: file.whisperLanguage ?? process.env.WHISPER_LANGUAGE ?? "en",
-    whisperPrompt: file.whisperPrompt ?? process.env.WHISPER_INITIAL_PROMPT ?? "",
+    whisperPrompt,
     moonshinePythonCommand: file.moonshinePythonCommand ?? "python3",
     moonshineSidecarPath: file.moonshineSidecarPath ?? resolveMoonshineSidecarPath(),
     moonshineLanguage: file.moonshineLanguage ?? "en",

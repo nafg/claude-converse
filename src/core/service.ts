@@ -23,6 +23,11 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
   private recentEntries: TranscriptEntry[] = [];
   private activeTts?: ChildProcess;
   private speechAbortController?: AbortController;
+  private readonly transcriptionAbortControllers = new Set<AbortController>();
+  private readonly pendingVadTasks = new Set<Promise<void>>();
+  private lifecycleGeneration = 0;
+  private stopping?: Promise<void>;
+  private recorderStopGraceMs = 1_000;
   private speakGeneration = 0;
   private lastSpokenHash?: string;
 
@@ -35,30 +40,70 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
   }
 
   async start(): Promise<void> {
+    if (this.stopping) await this.stopping;
     if (this.recorder) return;
+    const generation = ++this.lifecycleGeneration;
     if (this.config.sttProvider === "moonshine") await this.ensureMoonshine();
+    if (generation !== this.lifecycleGeneration) return;
+
     const args = this.recorderArgs();
     const recorder = spawn(this.config.recorderCommand, args, { stdio: ["ignore", "pipe", "pipe"] });
     this.recorder = recorder;
-    recorder.stdout.on("data", (chunk: Buffer) => this.onRecorderData(chunk));
+    recorder.stdout.on("data", (chunk: Buffer) => this.onRecorderData(chunk, generation));
     recorder.stderr.on("data", () => undefined);
-    recorder.on("error", (error) => this.emit("error", error));
+    recorder.on("error", (error) => {
+      if (generation === this.lifecycleGeneration) this.emit("error", error);
+    });
     recorder.on("close", (code, signal) => {
-      this.recorder = undefined;
-      if (code !== 0 && signal !== "SIGTERM") {
+      if (this.recorder === recorder) this.recorder = undefined;
+      if (generation === this.lifecycleGeneration && code !== 0 && signal !== "SIGTERM") {
         this.emit("error", new Error(`Recorder exited unexpectedly: code=${code} signal=${signal}`));
       }
     });
   }
 
   async stop(): Promise<void> {
+    if (this.stopping) return this.stopping;
+    const stopping = this.stopInternal();
+    this.stopping = stopping;
+    try {
+      await stopping;
+    } finally {
+      if (this.stopping === stopping) this.stopping = undefined;
+    }
+  }
+
+  private async stopInternal(): Promise<void> {
+    this.lifecycleGeneration += 1;
     this.stopSpeaking();
+    for (const controller of this.transcriptionAbortControllers) controller.abort();
+    this.transcriptionAbortControllers.clear();
+    this.recorderCarry = Buffer.alloc(0);
+    this.vad.reset();
+
     const recorder = this.recorder;
     this.recorder = undefined;
-    if (recorder && !recorder.killed) recorder.kill("SIGTERM");
     const moonshine = this.moonshine;
     this.moonshine = undefined;
-    if (moonshine) await moonshine.stop();
+    const pendingVadTasks = [...this.pendingVadTasks];
+    await Promise.all([
+      recorder ? this.stopRecorder(recorder) : Promise.resolve(),
+      moonshine ? moonshine.stop() : Promise.resolve(),
+    ]);
+    await Promise.allSettled(pendingVadTasks);
+  }
+
+  private async stopRecorder(recorder: ChildProcess): Promise<void> {
+    if (recorder.exitCode !== null || recorder.signalCode !== null) return;
+    const closed = once(recorder, "close").then(() => undefined).catch(() => undefined);
+    recorder.kill("SIGTERM");
+    const graceful = await Promise.race([
+      closed.then(() => true),
+      sleep(this.recorderStopGraceMs).then(() => false),
+    ]);
+    if (graceful || recorder.exitCode !== null || recorder.signalCode !== null) return;
+    recorder.kill("SIGKILL");
+    await closed;
   }
 
   renderStatus(ownerId: string): string {
@@ -157,21 +202,29 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
     return chunks.length > 0;
   }
 
-  private onRecorderData(chunk: Buffer): void {
+  private onRecorderData(chunk: Buffer, generation: number): void {
+    if (generation !== this.lifecycleGeneration) return;
     this.recorderCarry = Buffer.concat([this.recorderCarry, chunk]);
     const frameBytes = this.vad.getFrameBytes();
     while (this.recorderCarry.length >= frameBytes) {
       const frame = this.recorderCarry.subarray(0, frameBytes);
       this.recorderCarry = this.recorderCarry.subarray(frameBytes);
-      for (const emission of this.vad.pushFrame(frame)) {
-        void this.handleVadEmission(emission).catch((error: unknown) => {
-          this.emit("error", error instanceof Error ? error : new Error(String(error)));
-        });
-      }
+      for (const emission of this.vad.pushFrame(frame)) this.runVadEmission(emission, generation);
     }
   }
 
-  private async handleVadEmission(emission: VadEmission): Promise<void> {
+  private runVadEmission(emission: VadEmission, generation: number): void {
+    const task = this.handleVadEmission(emission, generation);
+    this.pendingVadTasks.add(task);
+    void task.catch((error: unknown) => {
+      if (generation === this.lifecycleGeneration) {
+        this.emit("error", error instanceof Error ? error : new Error(String(error)));
+      }
+    }).finally(() => this.pendingVadTasks.delete(task));
+  }
+
+  private async handleVadEmission(emission: VadEmission, generation: number): Promise<void> {
+    if (generation !== this.lifecycleGeneration) return;
     if (emission.type === "barge-in") {
       this.stopSpeaking();
       this.emit("barge-in");
@@ -179,7 +232,7 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
     }
     if (emission.type === "speech-start") return;
     const text = await this.transcribe(emission.audio);
-    if (!text) return;
+    if (generation !== this.lifecycleGeneration || !text) return;
     const entry: TranscriptEntry = {
       id: emission.utteranceId,
       final: emission.type === "final",
@@ -217,15 +270,21 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
     form.set("language", this.config.whisperLanguage);
     if (this.config.whisperPrompt) form.set("prompt", this.config.whisperPrompt);
     form.set("file", new Blob([new Uint8Array(wav)], { type: "audio/wav" }), "audio.wav");
-    const response = await fetch(this.config.whisperUrl, {
-      method: "POST",
-      headers: this.apiHeaders("transcription"),
-      body: form,
-      signal: AbortSignal.timeout(this.config.apiTimeoutMs),
-    });
-    if (!response.ok) throw await this.requestError("transcription", response);
-    const payload = (await response.json()) as { text?: string };
-    return payload.text?.trim() ?? "";
+    const controller = new AbortController();
+    this.transcriptionAbortControllers.add(controller);
+    try {
+      const response = await fetch(this.config.whisperUrl, {
+        method: "POST",
+        headers: this.apiHeaders("transcription"),
+        body: form,
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(this.config.apiTimeoutMs)]),
+      });
+      if (!response.ok) throw await this.requestError("transcription", response);
+      const payload = (await response.json()) as { text?: string };
+      return payload.text?.trim() ?? "";
+    } finally {
+      this.transcriptionAbortControllers.delete(controller);
+    }
   }
 
   private async synthesize(text: string, signal?: AbortSignal): Promise<Buffer> {

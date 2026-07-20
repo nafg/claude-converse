@@ -26,6 +26,17 @@ export class EnergyVad {
     return this.frameBytes;
   }
 
+  reset(): void {
+    this.preBuffer.length = 0;
+    this.speechFrames.length = 0;
+    this.consecutiveSpeech = 0;
+    this.consecutiveSilence = 0;
+    this.consecutiveLoud = 0;
+    this.inSpeech = false;
+    this.chunkEmitted = false;
+    this.ttsKilled = false;
+  }
+
   pushFrame(frame: Buffer): VadEmission[] {
     const emissions: VadEmission[] = [];
     const rms = this.computeRms(frame);

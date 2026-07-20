@@ -11,6 +11,20 @@
   "keywords": [
     "pi-package"
   ],
+  "files": [
+    ".claude-plugin/*.json",
+    "dist/",
+    "hooks/hooks.json",
+    "pi/index.js",
+    "services/*.py",
+    "skills/**/*.md",
+    "skills/**/*.sh",
+    "CHANGELOG.md",
+    "CLAUDE.md",
+    "LICENSE",
+    "README.md",
+    "config*.json"
+  ],
   "bin": {
     "converse-claude-daemon": "./dist/claude/daemon.js",
     "converse-claude-speak-hook": "./dist/claude/speak-hook.js",
@@ -24,6 +38,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-runtime-assets.mjs",
+    "check:package": "node scripts/check-package.mjs",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"

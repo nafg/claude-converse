@@ -23,6 +23,7 @@ const configEnv = [
   "OPENAI_TTS_API_KEY",
   "WHISPER_URL",
   "WHISPER_MODEL",
+  "WHISPER_INITIAL_PROMPT",
   "KOKORO_URL",
   "KOKORO_VOICE",
   "KOKORO_MODEL",
@@ -626,7 +627,7 @@ describe("loadConfig", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
-  it("validates Moonshine-only settings and rejects credentials", () => {
+  it("validates Moonshine-only settings and rejects credentials or resolved prompts", () => {
     const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
     const path = join(directory, "config.json");
     for (const invalid of [
@@ -640,6 +641,10 @@ describe("loadConfig", () => {
       writeFileSync(path, JSON.stringify({ sttProvider: "moonshine", ttsProvider: "local", ...invalid }));
       expect(() => loadConfig(path)).toThrow(/moonshine|Moonshine|sttApiKey|whisperPrompt/);
     }
+
+    writeFileSync(path, JSON.stringify({ sttProvider: "moonshine", ttsProvider: "local" }));
+    process.env.WHISPER_INITIAL_PROMPT = "inherited but unsupported";
+    expect(() => loadConfig(path)).toThrow(/whisperPrompt.*moonshine/);
     rmSync(directory, { recursive: true, force: true });
   });
 

@@ -279,7 +279,7 @@ Legacy environment variables and their corresponding file settings:
 
 - `CONVERSE_HOST` → `host` — default `127.0.0.1`
 - `CONVERSE_PORT` → `port` — default `45839`
-- `CONVERSE_STT_PROVIDER` → `sttProvider` — independently selects `openai`, `groq`, `speaches`, `whisper.cpp`, or the compatibility alias `local` for transcription
+- `CONVERSE_STT_PROVIDER` → `sttProvider` — independently selects `openai`, `groq`, `moonshine`, `speaches`, `whisper.cpp`, or the compatibility alias `local` for transcription
 - `CONVERSE_TTS_PROVIDER` → `ttsProvider` — independently selects `openai`, `kokoro`, `piper`, `pocket-tts`, `speaches-kokoro`, or the compatibility alias `local` for speech
 - `OPENAI_STT_API_KEY` → `sttApiKey` — legacy environment fallback used only for OpenAI transcription; set `sttApiKey` in the file for Groq or optional loopback Speaches authentication
 - `OPENAI_TTS_API_KEY` → `ttsApiKey` — legacy environment fallback used only for OpenAI speech; set `ttsApiKey` in the file for optional loopback Speaches Kokoro or Piper authentication
