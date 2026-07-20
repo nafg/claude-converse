@@ -60,7 +60,7 @@ There is no Pi-side daemon. The extension binds the same configured port only to
    - partial snapshot
    - final snapshot
    - barge-in
-3. final snapshots go to the independently configured STT provider: hosted OpenAI/Groq or local Whisper-compatible HTTP
+3. final snapshots go to the independently configured STT provider: hosted OpenAI/Groq, local Whisper-compatible HTTP, or the persistent official Moonshine Voice sidecar
 4. assistant text goes to the independently configured TTS provider: OpenAI-compatible speech or the official Pocket TTS multipart API
 5. synthesized WAV is played via `paplay` to the OS-selected default output; Pocket TTS streams its chunked WAV response directly to the player
 

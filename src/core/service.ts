@@ -2,6 +2,7 @@ import { EventEmitter, once } from "node:events";
 import { spawn, type ChildProcess } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { ConverseConfig } from "./config.js";
+import { MoonshineClient } from "./moonshine.js";
 import { encodeWav } from "./wav.js";
 import { hashText, speakableText, splitSpeechChunks } from "./text.js";
 import type { SpeechChunk, TranscriptEntry } from "./types.js";
@@ -17,6 +18,7 @@ interface ServiceEvents {
 export class ConverseService extends EventEmitter<ServiceEvents> {
   private readonly vad: EnergyVad;
   private recorder?: ChildProcess;
+  private moonshine?: MoonshineClient;
   private recorderCarry = Buffer.alloc(0);
   private recentEntries: TranscriptEntry[] = [];
   private activeTts?: ChildProcess;
@@ -34,6 +36,7 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
 
   async start(): Promise<void> {
     if (this.recorder) return;
+    if (this.config.sttProvider === "moonshine") await this.ensureMoonshine();
     const args = this.recorderArgs();
     const recorder = spawn(this.config.recorderCommand, args, { stdio: ["ignore", "pipe", "pipe"] });
     this.recorder = recorder;
@@ -53,6 +56,9 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
     const recorder = this.recorder;
     this.recorder = undefined;
     if (recorder && !recorder.killed) recorder.kill("SIGTERM");
+    const moonshine = this.moonshine;
+    this.moonshine = undefined;
+    if (moonshine) await moonshine.stop();
   }
 
   renderStatus(ownerId: string): string {
@@ -199,6 +205,11 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
   }
 
   private async transcribe(audio: Buffer): Promise<string> {
+    if (this.config.sttProvider === "moonshine") {
+      const moonshine = await this.ensureMoonshine();
+      return moonshine.transcribe(audio, this.config.sampleRate, this.config.channels);
+    }
+
     const wav = encodeWav(audio, this.config.sampleRate, this.config.channels, this.config.bytesPerSample);
     const form = new FormData();
     form.set("model", this.config.whisperModel);
@@ -287,6 +298,20 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
                 : "Kokoro";
     const detail = (await response.text()).trim().replace(/\s+/g, " ").slice(0, 500);
     return new Error(`${backend} ${operation} request failed: ${response.status}${detail ? `: ${detail}` : ""}`);
+  }
+
+  private async ensureMoonshine(): Promise<MoonshineClient> {
+    if (!this.moonshine) {
+      this.moonshine = new MoonshineClient({
+        pythonCommand: this.config.moonshinePythonCommand,
+        sidecarPath: this.config.moonshineSidecarPath,
+        language: this.config.moonshineLanguage,
+        model: this.config.moonshineModel,
+        timeoutMs: this.config.apiTimeoutMs,
+      }, (error) => this.emit("error", error));
+    }
+    await this.moonshine.start();
+    return this.moonshine;
   }
 
   private recorderArgs(): string[] {

@@ -593,6 +593,56 @@ describe("loadConfig", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  it("selects Moonshine with a persistent local sidecar and documented defaults", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
+    const path = join(directory, "config.json");
+    writeFileSync(path, JSON.stringify({
+      sttProvider: "moonshine",
+      ttsProvider: "pocket-tts",
+      moonshinePythonCommand: "/opt/moonshine/bin/python",
+      moonshineSidecarPath: "/opt/converse/moonshine-sidecar.py",
+      moonshineLanguage: "es",
+      moonshineModel: "medium-streaming",
+    }));
+
+    expect(loadConfig(path)).toMatchObject({
+      sttProvider: "moonshine",
+      ttsProvider: "pocket-tts",
+      voiceProvider: "local",
+      sttApiKey: undefined,
+      moonshinePythonCommand: "/opt/moonshine/bin/python",
+      moonshineSidecarPath: "/opt/converse/moonshine-sidecar.py",
+      moonshineLanguage: "es",
+      moonshineModel: "medium-streaming",
+    });
+
+    writeFileSync(path, JSON.stringify({ sttProvider: "moonshine", ttsProvider: "kokoro" }));
+    expect(loadConfig(path)).toMatchObject({
+      moonshinePythonCommand: "python3",
+      moonshineLanguage: "en",
+      moonshineModel: "small-streaming",
+    });
+    expect(loadConfig(path).moonshineSidecarPath).toMatch(/services\/moonshine-sidecar\.py$/);
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("validates Moonshine-only settings and rejects credentials", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
+    const path = join(directory, "config.json");
+    for (const invalid of [
+      { moonshineLanguage: "fr" },
+      { moonshineModel: "large" },
+      { moonshinePythonCommand: "" },
+      { moonshineSidecarPath: "" },
+      { sttApiKey: "not-used" },
+      { whisperPrompt: "unsupported priming" },
+    ]) {
+      writeFileSync(path, JSON.stringify({ sttProvider: "moonshine", ttsProvider: "local", ...invalid }));
+      expect(() => loadConfig(path)).toThrow(/moonshine|Moonshine|sttApiKey|whisperPrompt/);
+    }
+    rmSync(directory, { recursive: true, force: true });
+  });
+
   it("reports malformed, unknown, and incorrectly typed file settings", () => {
     const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
     const path = join(directory, "config.json");

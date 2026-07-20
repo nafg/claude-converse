@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export interface ConverseConfig {
   sampleRate: number;
@@ -32,6 +33,10 @@ export interface ConverseConfig {
   whisperModel: string;
   whisperLanguage: string;
   whisperPrompt: string;
+  moonshinePythonCommand: string;
+  moonshineSidecarPath: string;
+  moonshineLanguage: MoonshineLanguage;
+  moonshineModel: MoonshineModel;
   kokoroUrl: string;
   kokoroVoice: string;
   kokoroModel: string;
@@ -46,14 +51,16 @@ export interface ConverseConfig {
   port: number;
 }
 
-export type SttProvider = "local" | "openai" | "groq" | "speaches" | "whisper.cpp";
+export type SttProvider = "local" | "moonshine" | "openai" | "groq" | "speaches" | "whisper.cpp";
 export type TtsProvider = "local" | "openai" | "kokoro" | "piper" | "pocket-tts" | "speaches-kokoro";
+export type MoonshineLanguage = "ar" | "en" | "es" | "ja" | "ko" | "uk" | "vi" | "zh";
+export type MoonshineModel = "tiny" | "base" | "tiny-streaming" | "base-streaming" | "small-streaming" | "medium-streaming";
 type LegacyAudioProvider = "local" | "openai";
 type FileConfig = Partial<Omit<ConverseConfig, "voiceProvider" | "apiKey">> & {
   voiceProvider?: LegacyAudioProvider;
   apiKey?: string;
 };
-type ValueKind = "number" | "string" | "string[]" | "stt-provider" | "tts-provider" | "legacy-provider";
+type ValueKind = "number" | "string" | "string[]" | "stt-provider" | "tts-provider" | "legacy-provider" | "moonshine-language" | "moonshine-model";
 
 const fileConfigKinds: Record<keyof ConverseConfig, ValueKind> = {
   sampleRate: "number",
@@ -83,6 +90,10 @@ const fileConfigKinds: Record<keyof ConverseConfig, ValueKind> = {
   whisperModel: "string",
   whisperLanguage: "string",
   whisperPrompt: "string",
+  moonshinePythonCommand: "string",
+  moonshineSidecarPath: "string",
+  moonshineLanguage: "moonshine-language",
+  moonshineModel: "moonshine-model",
   kokoroUrl: "string",
   kokoroVoice: "string",
   kokoroModel: "string",
@@ -126,7 +137,11 @@ const readFileConfig = (path: string): FileConfig => {
     const valid = kind === "string[]"
       ? Array.isArray(item) && item.every((entry) => typeof entry === "string")
       : kind === "stt-provider"
-        ? item === "local" || item === "openai" || item === "groq" || item === "speaches" || item === "whisper.cpp"
+        ? item === "local" || item === "moonshine" || item === "openai" || item === "groq" || item === "speaches" || item === "whisper.cpp"
+        : kind === "moonshine-language"
+          ? item === "ar" || item === "en" || item === "es" || item === "ja" || item === "ko" || item === "uk" || item === "vi" || item === "zh"
+          : kind === "moonshine-model"
+            ? item === "tiny" || item === "base" || item === "tiny-streaming" || item === "base-streaming" || item === "small-streaming" || item === "medium-streaming"
         : kind === "tts-provider"
           ? item === "local" || item === "openai" || item === "kokoro" || item === "piper" || item === "pocket-tts" || item === "speaches-kokoro"
           : kind === "legacy-provider"
@@ -166,8 +181,8 @@ const legacyProviderEnv = (name: string): LegacyAudioProvider | undefined => {
 const sttProviderEnv = (): SttProvider | undefined => {
   const configured = process.env.CONVERSE_STT_PROVIDER?.trim().toLowerCase();
   if (!configured) return undefined;
-  if (configured === "local" || configured === "openai" || configured === "groq" || configured === "speaches" || configured === "whisper.cpp") return configured;
-  throw new Error(`CONVERSE_STT_PROVIDER=${configured} is unsupported; use local, whisper.cpp, speaches, groq, or openai`);
+  if (configured === "local" || configured === "moonshine" || configured === "openai" || configured === "groq" || configured === "speaches" || configured === "whisper.cpp") return configured;
+  throw new Error(`CONVERSE_STT_PROVIDER=${configured} is unsupported; use local, whisper.cpp, moonshine, speaches, groq, or openai`);
 };
 
 const ttsProviderEnv = (): TtsProvider | undefined => {
@@ -233,6 +248,9 @@ const isPocketTtsUrl = (value: string): boolean => {
   }
 };
 
+const defaultMoonshineSidecarPath = (): string =>
+  fileURLToPath(new URL("../../services/moonshine-sidecar.py", import.meta.url));
+
 export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
   const file = readFileConfig(path);
   const environmentProvider = legacyVoiceProvider();
@@ -269,6 +287,18 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
         : "http://localhost:8880/v1/audio/speech");
 
   if (bytesPerSample !== 2) throw new Error(`bytesPerSample=${bytesPerSample} is unsupported; only 2-byte S16_LE audio is supported`);
+  if (sttProvider === "moonshine" && file.sttApiKey !== undefined) {
+    throw new Error("sttApiKey is unsupported when sttProvider is moonshine; Moonshine runs as a local child process");
+  }
+  if (sttProvider === "moonshine" && file.whisperPrompt?.trim()) {
+    throw new Error("whisperPrompt is unsupported when sttProvider is moonshine");
+  }
+  if (file.moonshinePythonCommand !== undefined && !file.moonshinePythonCommand.trim()) {
+    throw new Error("moonshinePythonCommand must not be empty");
+  }
+  if (file.moonshineSidecarPath !== undefined && !file.moonshineSidecarPath.trim()) {
+    throw new Error("moonshineSidecarPath must not be empty");
+  }
   if ((sttProvider === "openai" || sttProvider === "groq") && !sttApiKey) {
     throw new Error(`sttApiKey must be set in ${path} when sttProvider is ${sttProvider}`);
   }
@@ -353,6 +383,10 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
             : "base"),
     whisperLanguage: file.whisperLanguage ?? process.env.WHISPER_LANGUAGE ?? "en",
     whisperPrompt: file.whisperPrompt ?? process.env.WHISPER_INITIAL_PROMPT ?? "",
+    moonshinePythonCommand: file.moonshinePythonCommand ?? "python3",
+    moonshineSidecarPath: file.moonshineSidecarPath ?? defaultMoonshineSidecarPath(),
+    moonshineLanguage: file.moonshineLanguage ?? "en",
+    moonshineModel: file.moonshineModel ?? "small-streaming",
     kokoroUrl,
     kokoroVoice: file.kokoroVoice ?? process.env.CONVERSE_TTS_VOICE ?? process.env.KOKORO_VOICE ?? (ttsProvider === "openai"
       ? "alloy"

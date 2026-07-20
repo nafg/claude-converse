@@ -2,7 +2,7 @@ import { chmodSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import conversePiExtension from "./index.js";
+import conversePiExtension, { sttBackendLabel } from "./index.js";
 
 const envNames = [
   "CONVERSE_PORT",
@@ -22,6 +22,10 @@ afterEach(() => {
 });
 
 describe("Pi converse extension", () => {
+  it("labels Moonshine explicitly in voice-mode status", () => {
+    expect(sttBackendLabel("moonshine")).toBe("Moonshine");
+  });
+
   it("does not await speech playback from message_end", async () => {
     const recorderCommand = join(tmpdir(), `converse-test-recorder-${process.pid}`);
     writeFileSync(recorderCommand, "#!/bin/sh\nexec sleep 60\n");

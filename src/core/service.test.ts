@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "./config.js";
 import { ConverseService } from "./service.js";
@@ -82,6 +85,16 @@ const groqConfig = () => ({
   whisperPrompt: "Programming terms",
 });
 
+const moonshineConfig = (sidecarPath: string) => ({
+  ...kokoroConfig(),
+  sttProvider: "moonshine" as const,
+  sttApiKey: undefined,
+  moonshinePythonCommand: process.execPath,
+  moonshineSidecarPath: sidecarPath,
+  moonshineLanguage: "en" as const,
+  moonshineModel: "small-streaming" as const,
+});
+
 const speachesConfig = (sttApiKey?: string) => ({
   ...kokoroConfig(),
   sttProvider: "speaches" as const,
@@ -120,6 +133,33 @@ describe("ConverseService API authentication", () => {
     expect(form.get("model")).toBe("base.en");
     expect(form.get("language")).toBe("en");
     expect(form.get("prompt")).toBe("Programming terms");
+  });
+
+  it("routes repeated Moonshine utterances through one persistent local sidecar", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "converse-moonshine-service-test-"));
+    const sidecar = join(directory, "fake-sidecar.mjs");
+    writeFileSync(sidecar, `
+import readline from "node:readline";
+console.log(JSON.stringify({ type: "ready" }));
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const request = JSON.parse(line);
+  console.log(JSON.stringify({ type: "result", id: request.id, text: "local-" + process.pid }));
+});
+`);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const concrete = new ConverseService(moonshineConfig(sidecar), "test-owner");
+    const service = concrete as unknown as ServiceInternals;
+    try {
+      const first = await service.transcribe(Buffer.alloc(960));
+      const second = await service.transcribe(Buffer.alloc(960));
+      expect(first).toMatch(/^local-\d+$/);
+      expect(second).toBe(first);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      await concrete.stop();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("sends Groq its supported multipart fields and only the STT key", async () => {

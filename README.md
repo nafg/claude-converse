@@ -7,7 +7,7 @@ This branch rebuilds Converse around a shared **TypeScript voice core**:
 - **Claude adapter**: runs a localhost HTTP daemon
 - **Pi adapter**: runs the same service in-process inside the extension
 - **Linux audio tools**: microphone capture via `parecord`, playback via `paplay` by default
-- **Independent STT/TTS backends**: mix local whisper.cpp, Speaches, and Kokoro HTTP with hosted OpenAI or Groq audio APIs
+- **Independent STT/TTS backends**: mix local whisper.cpp, Moonshine, Speaches, Kokoro, Piper, or Pocket TTS with hosted OpenAI or Groq audio APIs
 
 ## Current architecture
 
@@ -16,7 +16,7 @@ This branch rebuilds Converse around a shared **TypeScript voice core**:
 - `src/core/service.ts` — voice service orchestration
 - `src/core/vad.ts` — energy-based VAD state machine
 - `src/core/text.ts` — markdown / echo stripping and speech chunking
-- `src/core/config.ts` — env-var configuration
+- `src/core/config.ts` — shared JSON configuration
 
 ### Claude
 
@@ -40,7 +40,7 @@ You need:
 - Node.js
 - `parecord` / `paplay` (usually from PulseAudio/PipeWire Pulse tools)
 - **hosted:** an OpenAI or Groq API key stored in the user config
-- **local:** a Whisper-compatible server, a Speaches server (Faster-Whisper, Kokoro ONNX, or Piper), a Kokoro-compatible TTS server, the official Pocket TTS server, or one of each alongside a hosted provider
+- **local:** a Whisper-compatible server, the official Moonshine Voice Python package, a Speaches server (Faster-Whisper, Kokoro ONNX, or Piper), a Kokoro-compatible TTS server, the official Pocket TTS server, or one of each alongside a hosted provider
 
 ## Configuration
 
@@ -123,6 +123,34 @@ SPEACHES_BASE_URL=http://localhost:8000 \
 Speaches publishes separate [CPU and CUDA container instructions](https://speaches.ai/installation/). Its Faster-Whisper settings support `WHISPER__INFERENCE_DEVICE=cpu` or `cuda`; `WHISPER__COMPUTE_TYPE=int8` is a useful CPU-oriented starting point, while CUDA users should benchmark the supported float16 or int8 variants on their own GPU. These configure the external Speaches process, not Converse; Converse only selects its endpoint and model.
 
 Authentication is optional. Set `sttApiKey` in the Converse config only if the local Speaches server has API-key protection enabled. Authenticated Speaches URLs are restricted to loopback addresses (`localhost`, `127.x.x.x`, or `::1`), the exact `/v1/audio/transcriptions` path, and no URL-embedded credentials. This prevents a typo or remote override from receiving the key. Keyless Speaches may use a custom HTTP(S) host with that exact path, such as a trusted LAN server. The STT key is never attached to TTS.
+
+#### Moonshine Voice transcription
+
+[Moonshine Voice](https://github.com/moonshine-ai/moonshine) is an on-device STT toolkit optimized for live voice applications. Converse uses the official `moonshine-voice` Python package directly; it does not depend on a community HTTP wrapper. Use the complete [`config.moonshine-pocket-tts.example.json`](config.moonshine-pocket-tts.example.json), or select it with:
+
+```json
+{
+  "sttProvider": "moonshine",
+  "moonshinePythonCommand": "python3",
+  "moonshineLanguage": "en",
+  "moonshineModel": "small-streaming",
+  "ttsProvider": "pocket-tts"
+}
+```
+
+Install the official package into the Python interpreter named by `moonshinePythonCommand`:
+
+```bash
+python3 -m pip install moonshine-voice
+```
+
+Converse starts the bundled `services/moonshine-sidecar.py` when voice mode starts. The sidecar calls the official [`get_model_for_language`](https://github.com/moonshine-ai/moonshine/blob/44f8c18dab3f6ab61e2a0a13c22e80f8069d503f/python/src/moonshine_voice/download.py#L410-L435) helper once, keeps one [`Transcriber`](https://github.com/moonshine-ai/moonshine/blob/44f8c18dab3f6ab61e2a0a13c22e80f8069d503f/python/src/moonshine_voice/transcriber.py#L94-L226) resident, and uses `transcribe_without_streaming` for each VAD-delimited PCM utterance. The first start can download model files; increase `apiTimeoutMs` if that initial download cannot finish within the configured timeout. Pi `/reload` and Claude `/converse off` stop the child process; the next start loads the newly edited configuration and creates a fresh sidecar.
+
+Supported `moonshineLanguage` values follow the current official Python package: `en`, `es`, `zh`, `ja`, `ko`, `vi`, `ar`, and `uk`. Supported `moonshineModel` values mirror its `ModelArch` enum: `tiny`, `base`, `tiny-streaming`, `base-streaming`, `small-streaming`, and `medium-streaming`; the architectures actually published can vary by language, and startup reports an unavailable combination. Converse defaults to `small-streaming` as a quality/speed starting point, but does not claim local benchmark results; try the available architectures on the target machine. Non-English Moonshine models use the project's Moonshine Community License rather than the English model's MIT license.
+
+`moonshineSidecarPath` can override the bundled bridge for development or packaging layouts, but normally should be omitted. Moonshine mode accepts no API key and does not send audio over HTTP. The JSONL child protocol correlates concurrent requests, applies the common API timeout, reports Python stderr on crashes, and terminates an unhealthy process after a stuck inference.
+
+This first provider keeps Converse's existing energy VAD and utterance-at-pause behavior. It does not yet feed live microphone frames into Moonshine's streaming API. That deeper partial-transcription architecture remains tracked in Beads issue `claude-converse-i2f`.
 
 #### whisper.cpp transcription
 

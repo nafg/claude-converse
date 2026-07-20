@@ -1,9 +1,21 @@
 import net from "node:net";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
-import { loadConfig } from "../core/config.js";
+import { loadConfig, type SttProvider } from "../core/config.js";
 import { ConverseService } from "../core/service.js";
 import { VoiceWaitCoordinator } from "./voice-wait.js";
+
+export const sttBackendLabel = (provider: SttProvider): string => provider === "openai"
+  ? "OpenAI"
+  : provider === "moonshine"
+    ? "Moonshine"
+    : provider === "groq"
+      ? "Groq"
+      : provider === "speaches"
+        ? "Speaches"
+        : provider === "whisper.cpp"
+          ? "whisper.cpp"
+          : "local Whisper";
 
 const extractAssistantText = (message: unknown): string => {
   const candidate = message as { role?: string; content?: unknown };
@@ -157,15 +169,7 @@ export default function conversePiExtension(pi: ExtensionAPI) {
       }
       try {
         await startService(ctx);
-        const sttBackend = config.sttProvider === "openai"
-          ? "OpenAI"
-          : config.sttProvider === "groq"
-            ? "Groq"
-            : config.sttProvider === "speaches"
-              ? "Speaches"
-              : config.sttProvider === "whisper.cpp"
-                ? "whisper.cpp"
-                : "local Whisper";
+        const sttBackend = sttBackendLabel(config.sttProvider);
         const ttsBackend = config.ttsProvider === "openai"
           ? "OpenAI"
           : config.ttsProvider === "speaches-kokoro"
