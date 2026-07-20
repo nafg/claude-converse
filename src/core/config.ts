@@ -47,7 +47,7 @@ export interface ConverseConfig {
 }
 
 export type SttProvider = "local" | "openai" | "groq" | "speaches" | "whisper.cpp";
-export type TtsProvider = "local" | "openai" | "kokoro" | "speaches-kokoro";
+export type TtsProvider = "local" | "openai" | "kokoro" | "piper" | "speaches-kokoro";
 type LegacyAudioProvider = "local" | "openai";
 type FileConfig = Partial<Omit<ConverseConfig, "voiceProvider" | "apiKey">> & {
   voiceProvider?: LegacyAudioProvider;
@@ -128,7 +128,7 @@ const readFileConfig = (path: string): FileConfig => {
       : kind === "stt-provider"
         ? item === "local" || item === "openai" || item === "groq" || item === "speaches" || item === "whisper.cpp"
         : kind === "tts-provider"
-          ? item === "local" || item === "openai" || item === "kokoro" || item === "speaches-kokoro"
+          ? item === "local" || item === "openai" || item === "kokoro" || item === "piper" || item === "speaches-kokoro"
           : kind === "legacy-provider"
             ? item === "local" || item === "openai"
             : typeof item === kind && (kind !== "number" || Number.isFinite(item));
@@ -173,8 +173,8 @@ const sttProviderEnv = (): SttProvider | undefined => {
 const ttsProviderEnv = (): TtsProvider | undefined => {
   const configured = process.env.CONVERSE_TTS_PROVIDER?.trim().toLowerCase();
   if (!configured) return undefined;
-  if (configured === "local" || configured === "openai" || configured === "kokoro" || configured === "speaches-kokoro") return configured;
-  throw new Error(`CONVERSE_TTS_PROVIDER=${configured} is unsupported; use local, kokoro, speaches-kokoro, or openai`);
+  if (configured === "local" || configured === "openai" || configured === "kokoro" || configured === "piper" || configured === "speaches-kokoro") return configured;
+  throw new Error(`CONVERSE_TTS_PROVIDER=${configured} is unsupported; use local, kokoro, piper, speaches-kokoro, or openai`);
 };
 
 const legacyVoiceProvider = (): LegacyAudioProvider =>
@@ -231,7 +231,7 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
       : undefined;
   const ttsApiKey = ttsProvider === "openai"
     ? file.ttsApiKey ?? file.apiKey ?? process.env.OPENAI_TTS_API_KEY?.trim() ?? environmentApiKey
-    : ttsProvider === "speaches-kokoro"
+    : ttsProvider === "speaches-kokoro" || ttsProvider === "piper"
       ? file.ttsApiKey
       : undefined;
   const bytesPerSample = file.bytesPerSample ?? intEnv("CONVERSE_BYTES_PER_SAMPLE", 2);
@@ -247,7 +247,7 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
         : "http://localhost:2022/v1/audio/transcriptions");
   const kokoroUrl = file.kokoroUrl ?? process.env.KOKORO_URL ?? (ttsProvider === "openai"
     ? "https://api.openai.com/v1/audio/speech"
-    : ttsProvider === "speaches-kokoro"
+    : ttsProvider === "speaches-kokoro" || ttsProvider === "piper"
       ? "http://localhost:8000/v1/audio/speech"
       : "http://localhost:8880/v1/audio/speech");
 
@@ -278,11 +278,12 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
   if (ttsProvider === "openai" && !isOpenAiUrl(kokoroUrl)) {
     throw new Error("kokoroUrl must use https://api.openai.com when ttsProvider is openai");
   }
-  if (ttsProvider === "speaches-kokoro") {
+  if (ttsProvider === "speaches-kokoro" || ttsProvider === "piper") {
     const url = speachesAudioUrl(kokoroUrl, "/v1/audio/speech");
-    if (!url) throw new Error("kokoroUrl must be an HTTP(S) /v1/audio/speech URL without embedded credentials when ttsProvider is speaches-kokoro");
+    if (!url) throw new Error(`kokoroUrl must be an HTTP(S) /v1/audio/speech URL without embedded credentials when ttsProvider is ${ttsProvider}`);
     if (ttsApiKey && !isLoopbackHost(url.hostname)) {
-      throw new Error("ttsApiKey may be used with Speaches Kokoro only on a loopback kokoroUrl");
+      const backend = ttsProvider === "piper" ? "Speaches Piper" : "Speaches Kokoro";
+      throw new Error(`ttsApiKey may be used with ${backend} only on a loopback kokoroUrl`);
     }
   }
 
@@ -330,12 +331,18 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
     whisperLanguage: file.whisperLanguage ?? process.env.WHISPER_LANGUAGE ?? "en",
     whisperPrompt: file.whisperPrompt ?? process.env.WHISPER_INITIAL_PROMPT ?? "",
     kokoroUrl,
-    kokoroVoice: file.kokoroVoice ?? process.env.CONVERSE_TTS_VOICE ?? process.env.KOKORO_VOICE ?? (ttsProvider === "openai" ? "alloy" : "af_heart"),
+    kokoroVoice: file.kokoroVoice ?? process.env.CONVERSE_TTS_VOICE ?? process.env.KOKORO_VOICE ?? (ttsProvider === "openai"
+      ? "alloy"
+      : ttsProvider === "piper"
+        ? "lessac"
+        : "af_heart"),
     kokoroModel: file.kokoroModel ?? process.env.KOKORO_MODEL ?? (ttsProvider === "openai"
       ? "gpt-4o-mini-tts"
       : ttsProvider === "speaches-kokoro"
         ? "speaches-ai/Kokoro-82M-v1.0-ONNX"
-        : "kokoro"),
+        : ttsProvider === "piper"
+          ? "speaches-ai/piper-en_US-lessac-medium"
+          : "kokoro"),
     ttsSpeed,
     voiceWaitMs,
     recorderCommand: file.recorderCommand ?? process.env.CONVERSE_RECORDER_COMMAND ?? "parecord",

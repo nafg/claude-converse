@@ -170,9 +170,11 @@ export default function conversePiExtension(pi: ExtensionAPI) {
           ? "OpenAI"
           : config.ttsProvider === "speaches-kokoro"
             ? "Speaches Kokoro ONNX"
-            : config.ttsProvider === "kokoro"
-              ? "Kokoro"
-              : "local Kokoro";
+            : config.ttsProvider === "piper"
+              ? "Speaches Piper"
+              : config.ttsProvider === "kokoro"
+                ? "Kokoro"
+                : "local Kokoro";
         ctx.ui.notify(`voice mode on (STT: ${sttBackend}; TTS: ${ttsBackend})`, "info");
       } catch (error) {
         await stopService();

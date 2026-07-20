@@ -213,7 +213,7 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
         input: text,
         voice: this.config.kokoroVoice,
         response_format: "wav",
-        ...(this.config.ttsProvider === "openai" || this.config.ttsProvider === "speaches-kokoro"
+        ...(this.config.ttsProvider === "openai" || this.config.ttsProvider === "piper" || this.config.ttsProvider === "speaches-kokoro"
           ? { speed: this.config.ttsSpeed }
           : {}),
       }),
@@ -244,7 +244,9 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
               ? "Kokoro"
               : provider === "speaches-kokoro"
                 ? "Speaches Kokoro ONNX"
-                : operation === "transcription"
+                : provider === "piper"
+                  ? "Speaches Piper"
+                  : operation === "transcription"
                 ? "Whisper"
                 : "Kokoro";
     const detail = (await response.text()).trim().replace(/\s+/g, " ").slice(0, 500);

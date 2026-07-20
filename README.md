@@ -40,7 +40,7 @@ You need:
 - Node.js
 - `parecord` / `paplay` (usually from PulseAudio/PipeWire Pulse tools)
 - **hosted:** an OpenAI or Groq API key stored in the user config
-- **local:** a Whisper-compatible server, a Speaches server, a Kokoro-compatible TTS server, or one of each alongside a hosted provider
+- **local:** a Whisper-compatible server, a Speaches server (Faster-Whisper, Kokoro ONNX, or Piper), a Kokoro-compatible TTS server, or one of each alongside a hosted provider
 
 ## Configuration
 
@@ -190,14 +190,44 @@ Speaches unloads TTS models after 300 seconds by default. Its external `TTS_MODE
 
 Authentication is optional. Configure `ttsApiKey` only when a protected Speaches server runs on loopback. Keyless `speaches-kokoro` may use a trusted LAN HTTP(S) endpoint with the exact `/v1/audio/speech` path; authenticated endpoints are restricted to loopback and URL-embedded credentials are rejected. The TTS key is never attached to STT.
 
+#### Piper speech through Speaches
+
+[Piper](https://github.com/OHF-Voice/piper1-gpl) is the lightweight fallback for systems where predictable CPU use and operational stability matter more than Kokoro's natural prosody. It uses ONNX Runtime through the same Speaches `/v1/audio/speech` API. Piper is fast and very resource-efficient, but its cadence is more synthetic and can be less comfortable than Kokoro for long explanations. Use the complete [`config.piper.example.json`](config.piper.example.json) to try it with the existing whisper.cpp server:
+
+```json
+{
+  "sttProvider": "whisper.cpp",
+  "ttsProvider": "piper",
+  "kokoroUrl": "http://localhost:8000/v1/audio/speech",
+  "kokoroModel": "speaches-ai/piper-en_US-lessac-medium",
+  "kokoroVoice": "lessac",
+  "ttsSpeed": 1.25
+}
+```
+
+The default is the current [Speaches `en_US-lessac-medium` registry model](https://huggingface.co/speaches-ai/piper-en_US-lessac-medium): a single-speaker US English Piper voice at 22.05 kHz. Speaches derives the advertised voice id `lessac` from that model id; the model selects the actual speaker. List available Piper models and download the exact default before starting Converse:
+
+```bash
+SPEACHES_BASE_URL=http://localhost:8000 \
+  uvx speaches-cli registry ls --task text-to-speech \
+  | jq -r '.data[].id | select(test("/piper-"))'
+
+SPEACHES_BASE_URL=http://localhost:8000 \
+  uvx speaches-cli model download speaches-ai/piper-en_US-lessac-medium
+```
+
+`kokoroModel`, `kokoroVoice`, `kokoroUrl`, and `ttsSpeed` remain configurable because all speech providers share the existing provider-neutral fields. Speaches Piper accepts speed from `0.25` through `4`; higher values speak faster. Converse requests sentence-sized WAV chunks rather than one monolithic long response, so playback remains understandable and VAD barge-in can abort both in-flight synthesis and the active player between or during chunks.
+
+Authentication follows the same safety rules as Speaches Kokoro: `ttsApiKey` is optional, accepted only with a loopback `/v1/audio/speech` URL, and never sent to STT. Keyless Piper may target a trusted LAN Speaches endpoint. Converse selects and calls Piper but does not install, start, restart, or configure the external Speaches service.
+
 Legacy environment variables and their corresponding file settings:
 
 - `CONVERSE_HOST` → `host` — default `127.0.0.1`
 - `CONVERSE_PORT` → `port` — default `45839`
 - `CONVERSE_STT_PROVIDER` → `sttProvider` — independently selects `openai`, `groq`, `speaches`, `whisper.cpp`, or the compatibility alias `local` for transcription
-- `CONVERSE_TTS_PROVIDER` → `ttsProvider` — independently selects `openai`, `kokoro`, `speaches-kokoro`, or the compatibility alias `local` for speech
+- `CONVERSE_TTS_PROVIDER` → `ttsProvider` — independently selects `openai`, `kokoro`, `piper`, `speaches-kokoro`, or the compatibility alias `local` for speech
 - `OPENAI_STT_API_KEY` → `sttApiKey` — legacy environment fallback used only for OpenAI transcription; set `sttApiKey` in the file for Groq or optional loopback Speaches authentication
-- `OPENAI_TTS_API_KEY` → `ttsApiKey` — legacy environment fallback used only for OpenAI speech; set `ttsApiKey` in the file for optional loopback Speaches Kokoro authentication
+- `OPENAI_TTS_API_KEY` → `ttsApiKey` — legacy environment fallback used only for OpenAI speech; set `ttsApiKey` in the file for optional loopback Speaches Kokoro or Piper authentication
 - `CONVERSE_VOICE_PROVIDER` → legacy `voiceProvider` — coupled fallback for both providers
 - `OPENAI_API_KEY` → legacy `apiKey` — shared fallback key for existing installations
 - `CONVERSE_API_TIMEOUT_MS` → `apiTimeoutMs` — maximum time for each transcription or speech request; default `60000`
@@ -205,10 +235,10 @@ Legacy environment variables and their corresponding file settings:
 - `WHISPER_MODEL` → `whisperModel` — defaults to `gpt-4o-transcribe` on OpenAI, `whisper-large-v3-turbo` on Groq, `Systran/faster-distil-whisper-small.en` on Speaches, `base.en` for explicit `whisper.cpp`, or `base` for legacy `local`
 - `WHISPER_LANGUAGE` → `whisperLanguage` — default `en`
 - `WHISPER_INITIAL_PROMPT` → `whisperPrompt` — default empty
-- `KOKORO_URL` → `kokoroUrl` — speech URL; defaults to OpenAI, `http://localhost:8000/v1/audio/speech` for Speaches Kokoro ONNX, or `http://localhost:8880/v1/audio/speech` for other Kokoro-compatible providers
-- `CONVERSE_TTS_VOICE` → `kokoroVoice` — defaults to `alloy` on OpenAI or `af_heart` locally (`KOKORO_VOICE` remains a compatibility fallback)
-- `KOKORO_MODEL` → `kokoroModel` — defaults to `gpt-4o-mini-tts` on OpenAI, `speaches-ai/Kokoro-82M-v1.0-ONNX` on Speaches Kokoro ONNX, or `kokoro` locally
-- `CONVERSE_TTS_SPEED` → `ttsSpeed` — OpenAI speed range is `0.25` to `4`; Speaches Kokoro ONNX accepts `0.5` to `2`; default `1.25`
+- `KOKORO_URL` → `kokoroUrl` — speech URL; defaults to OpenAI, `http://localhost:8000/v1/audio/speech` for Speaches Kokoro ONNX or Piper, or `http://localhost:8880/v1/audio/speech` for other Kokoro-compatible providers
+- `CONVERSE_TTS_VOICE` → `kokoroVoice` — defaults to `alloy` on OpenAI, `lessac` on Piper, or `af_heart` on Kokoro-compatible providers (`KOKORO_VOICE` remains a compatibility fallback)
+- `KOKORO_MODEL` → `kokoroModel` — defaults to `gpt-4o-mini-tts` on OpenAI, `speaches-ai/Kokoro-82M-v1.0-ONNX` on Speaches Kokoro ONNX, `speaches-ai/piper-en_US-lessac-medium` on Piper, or `kokoro` locally
+- `CONVERSE_TTS_SPEED` → `ttsSpeed` — OpenAI and Speaches Piper accept `0.25` to `4`; Speaches Kokoro ONNX accepts `0.5` to `2`; default `1.25`
 - `CONVERSE_VOICE_WAIT_MS` → `voiceWaitMs` — maximum time the Pi model's `wait_for_voice` tool waits for continuation of an unfinished thought; default `5000`
 - `CONVERSE_RECORDER_COMMAND` → `recorderCommand` — default `parecord`
 - `CONVERSE_RECORDER_DEVICE` → `recorderDevice` — default `default` (used only by the `arecord` fallback)

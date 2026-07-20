@@ -446,6 +446,69 @@ describe("loadConfig", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  it("selects Speaches Piper independently with verified US English defaults", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
+    const path = join(directory, "config.json");
+
+    writeFileSync(path, JSON.stringify({ sttProvider: "whisper.cpp", ttsProvider: "piper" }));
+    expect(loadConfig(path)).toMatchObject({
+      sttProvider: "whisper.cpp",
+      ttsProvider: "piper",
+      voiceProvider: "local",
+      ttsApiKey: undefined,
+      kokoroUrl: "http://localhost:8000/v1/audio/speech",
+      kokoroModel: "speaches-ai/piper-en_US-lessac-medium",
+      kokoroVoice: "lessac",
+      ttsSpeed: 1.25,
+    });
+
+    writeFileSync(path, JSON.stringify({
+      sttProvider: "whisper.cpp",
+      ttsProvider: "piper",
+      ttsApiKey: "local-secret",
+      kokoroUrl: "https://127.0.0.1:8443/v1/audio/speech",
+      kokoroModel: "speaches-ai/piper-en_US-ryan-high",
+      kokoroVoice: "ryan",
+      ttsSpeed: 1.5,
+    }));
+    expect(loadConfig(path)).toMatchObject({
+      ttsProvider: "piper",
+      ttsApiKey: "local-secret",
+      kokoroUrl: "https://127.0.0.1:8443/v1/audio/speech",
+      kokoroModel: "speaches-ai/piper-en_US-ryan-high",
+      kokoroVoice: "ryan",
+      ttsSpeed: 1.5,
+    });
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("allows keyless custom Piper endpoints but protects configured credentials", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
+    const path = join(directory, "config.json");
+
+    writeFileSync(path, JSON.stringify({
+      sttProvider: "whisper.cpp",
+      ttsProvider: "piper",
+      kokoroUrl: "http://speaches.lan:8000/v1/audio/speech",
+    }));
+    expect(loadConfig(path).kokoroUrl).toBe("http://speaches.lan:8000/v1/audio/speech");
+
+    for (const kokoroUrl of [
+      "http://speaches.lan:8000/v1/audio/speech",
+      "http://localhost:8000/not-speech",
+      "http://user:password@localhost:8000/v1/audio/speech",
+    ]) {
+      writeFileSync(path, JSON.stringify({
+        sttProvider: "whisper.cpp",
+        ttsProvider: "piper",
+        ttsApiKey: "local-secret",
+        kokoroUrl,
+      }));
+      expect(() => loadConfig(path)).toThrow(/kokoroUrl|loopback/);
+    }
+    rmSync(directory, { recursive: true, force: true });
+  });
+
   it("selects whisper.cpp explicitly with local defaults and no API key", () => {
     const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
     const path = join(directory, "config.json");
