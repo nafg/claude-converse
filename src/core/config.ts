@@ -47,7 +47,7 @@ export interface ConverseConfig {
 }
 
 export type SttProvider = "local" | "openai" | "groq" | "speaches" | "whisper.cpp";
-export type TtsProvider = "local" | "openai" | "kokoro" | "piper" | "speaches-kokoro";
+export type TtsProvider = "local" | "openai" | "kokoro" | "piper" | "pocket-tts" | "speaches-kokoro";
 type LegacyAudioProvider = "local" | "openai";
 type FileConfig = Partial<Omit<ConverseConfig, "voiceProvider" | "apiKey">> & {
   voiceProvider?: LegacyAudioProvider;
@@ -128,7 +128,7 @@ const readFileConfig = (path: string): FileConfig => {
       : kind === "stt-provider"
         ? item === "local" || item === "openai" || item === "groq" || item === "speaches" || item === "whisper.cpp"
         : kind === "tts-provider"
-          ? item === "local" || item === "openai" || item === "kokoro" || item === "piper" || item === "speaches-kokoro"
+          ? item === "local" || item === "openai" || item === "kokoro" || item === "piper" || item === "pocket-tts" || item === "speaches-kokoro"
           : kind === "legacy-provider"
             ? item === "local" || item === "openai"
             : typeof item === kind && (kind !== "number" || Number.isFinite(item));
@@ -173,8 +173,8 @@ const sttProviderEnv = (): SttProvider | undefined => {
 const ttsProviderEnv = (): TtsProvider | undefined => {
   const configured = process.env.CONVERSE_TTS_PROVIDER?.trim().toLowerCase();
   if (!configured) return undefined;
-  if (configured === "local" || configured === "openai" || configured === "kokoro" || configured === "piper" || configured === "speaches-kokoro") return configured;
-  throw new Error(`CONVERSE_TTS_PROVIDER=${configured} is unsupported; use local, kokoro, piper, speaches-kokoro, or openai`);
+  if (configured === "local" || configured === "openai" || configured === "kokoro" || configured === "piper" || configured === "pocket-tts" || configured === "speaches-kokoro") return configured;
+  throw new Error(`CONVERSE_TTS_PROVIDER=${configured} is unsupported; use local, kokoro, piper, pocket-tts, speaches-kokoro, or openai`);
 };
 
 const legacyVoiceProvider = (): LegacyAudioProvider =>
@@ -218,6 +218,21 @@ const speachesAudioUrl = (value: string, pathname: "/v1/audio/transcriptions" | 
 const isLoopbackHost = (hostname: string): boolean =>
   hostname === "localhost" || hostname === "::1" || hostname === "[::1]" || /^127(?:\.\d{1,3}){3}$/.test(hostname);
 
+const isPocketTtsUrl = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:")
+      && isLoopbackHost(url.hostname)
+      && url.pathname === "/tts"
+      && !url.username
+      && !url.password
+      && !url.search
+      && !url.hash;
+  } catch {
+    return false;
+  }
+};
+
 export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
   const file = readFileConfig(path);
   const environmentProvider = legacyVoiceProvider();
@@ -249,13 +264,18 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
     ? "https://api.openai.com/v1/audio/speech"
     : ttsProvider === "speaches-kokoro" || ttsProvider === "piper"
       ? "http://localhost:8000/v1/audio/speech"
-      : "http://localhost:8880/v1/audio/speech");
+      : ttsProvider === "pocket-tts"
+        ? "http://localhost:8000/tts"
+        : "http://localhost:8880/v1/audio/speech");
 
   if (bytesPerSample !== 2) throw new Error(`bytesPerSample=${bytesPerSample} is unsupported; only 2-byte S16_LE audio is supported`);
   if ((sttProvider === "openai" || sttProvider === "groq") && !sttApiKey) {
     throw new Error(`sttApiKey must be set in ${path} when sttProvider is ${sttProvider}`);
   }
   if (ttsProvider === "openai" && !ttsApiKey) throw new Error(`ttsApiKey must be set in ${path} when ttsProvider is openai`);
+  if (ttsProvider === "pocket-tts" && file.ttsApiKey !== undefined) {
+    throw new Error("ttsApiKey is unsupported when ttsProvider is pocket-tts; the official server has no authentication");
+  }
   if (apiTimeoutMs <= 0) throw new Error("apiTimeoutMs must be a positive number");
   if (ttsSpeed < 0.25 || ttsSpeed > 4) throw new Error("ttsSpeed must be between 0.25 and 4");
   if (ttsProvider === "speaches-kokoro" && (ttsSpeed < 0.5 || ttsSpeed > 2)) {
@@ -285,6 +305,9 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
       const backend = ttsProvider === "piper" ? "Speaches Piper" : "Speaches Kokoro";
       throw new Error(`ttsApiKey may be used with ${backend} only on a loopback kokoroUrl`);
     }
+  }
+  if (ttsProvider === "pocket-tts" && !isPocketTtsUrl(kokoroUrl)) {
+    throw new Error("kokoroUrl must be a loopback HTTP(S) /tts URL without credentials, query, or fragment when ttsProvider is pocket-tts");
   }
 
   const voiceProvider = sttProvider === "openai" && ttsProvider === "openai"
@@ -335,14 +358,18 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
       ? "alloy"
       : ttsProvider === "piper"
         ? "lessac"
-        : "af_heart"),
+        : ttsProvider === "pocket-tts"
+          ? "alba"
+          : "af_heart"),
     kokoroModel: file.kokoroModel ?? process.env.KOKORO_MODEL ?? (ttsProvider === "openai"
       ? "gpt-4o-mini-tts"
       : ttsProvider === "speaches-kokoro"
         ? "speaches-ai/Kokoro-82M-v1.0-ONNX"
         : ttsProvider === "piper"
           ? "speaches-ai/piper-en_US-lessac-medium"
-          : "kokoro"),
+          : ttsProvider === "pocket-tts"
+            ? "pocket-tts"
+            : "kokoro"),
     ttsSpeed,
     voiceWaitMs,
     recorderCommand: file.recorderCommand ?? process.env.CONVERSE_RECORDER_COMMAND ?? "parecord",

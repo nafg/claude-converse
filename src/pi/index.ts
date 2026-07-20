@@ -172,9 +172,11 @@ export default function conversePiExtension(pi: ExtensionAPI) {
             ? "Speaches Kokoro ONNX"
             : config.ttsProvider === "piper"
               ? "Speaches Piper"
-              : config.ttsProvider === "kokoro"
-                ? "Kokoro"
-                : "local Kokoro";
+              : config.ttsProvider === "pocket-tts"
+                ? "Pocket TTS"
+                : config.ttsProvider === "kokoro"
+                  ? "Kokoro"
+                  : "local Kokoro";
         ctx.ui.notify(`voice mode on (STT: ${sttBackend}; TTS: ${ttsBackend})`, "info");
       } catch (error) {
         await stopService();

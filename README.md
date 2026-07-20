@@ -40,7 +40,7 @@ You need:
 - Node.js
 - `parecord` / `paplay` (usually from PulseAudio/PipeWire Pulse tools)
 - **hosted:** an OpenAI or Groq API key stored in the user config
-- **local:** a Whisper-compatible server, a Speaches server (Faster-Whisper, Kokoro ONNX, or Piper), a Kokoro-compatible TTS server, or one of each alongside a hosted provider
+- **local:** a Whisper-compatible server, a Speaches server (Faster-Whisper, Kokoro ONNX, or Piper), a Kokoro-compatible TTS server, the official Pocket TTS server, or one of each alongside a hosted provider
 
 ## Configuration
 
@@ -220,12 +220,39 @@ SPEACHES_BASE_URL=http://localhost:8000 \
 
 Authentication follows the same safety rules as Speaches Kokoro: `ttsApiKey` is optional, accepted only with a loopback `/v1/audio/speech` URL, and never sent to STT. Keyless Piper may target a trusted LAN Speaches endpoint. Converse selects and calls Piper but does not install, start, restart, or configure the external Speaches service.
 
+#### Official Pocket TTS speech
+
+[Kyutai Pocket TTS](https://github.com/kyutai-labs/pocket-tts) is a small CPU-oriented model aimed at low-latency, natural speech. It is a stronger candidate than Piper when long explanations need comfortable prosody, while keeping the GPU free for transcription. Converse talks directly to the official server API at the pinned implementation used for this adapter: [`POST /tts`](https://github.com/kyutai-labs/pocket-tts/blob/d108410d23eef7e01db282f9442891162dbc3db6/pocket_tts/main.py#L116-L179), not a community OpenAI wrapper.
+
+Use the complete [`config.pocket-tts.example.json`](config.pocket-tts.example.json), or configure the essential fields:
+
+```json
+{
+  "sttProvider": "whisper.cpp",
+  "ttsProvider": "pocket-tts",
+  "kokoroUrl": "http://localhost:8000/tts",
+  "kokoroVoice": "alba"
+}
+```
+
+Install and run the external server on loopback:
+
+```bash
+uvx pocket-tts serve --host localhost --port 8000 --quantize
+```
+
+The `--quantize` option enables the official int8 path to reduce CPU memory and can improve speed with minimal quality loss; benchmark it against the unquantized default on this machine. Pocket TTS provides several English voices, and `alba` is the default. Set `kokoroVoice` to another official built-in voice such as `anna`, or to an HTTP(S)/`hf://` voice prompt accepted by Pocket TTS. The provider-neutral field name is retained for config compatibility.
+
+For each sentence-sized speech chunk, Converse sends only the official multipart `text` and `voice_url` fields. It begins piping the chunked WAV response into the configured player as soon as audio arrives rather than buffering the whole response. This preserves time-to-first-audio while sentence chunking and explicit pauses keep long replies understandable. Barge-in aborts the HTTP stream and terminates the active player.
+
+The official server has no API authentication, model selector, or speed field on `/tts`; `ttsApiKey` is rejected, and Converse does not send `kokoroModel` or `ttsSpeed`. The adapter accepts only loopback HTTP(S) URLs with the exact `/tts` path and no embedded credentials, query, or fragment. Converse does not install, start, or supervise Pocket TTS.
+
 Legacy environment variables and their corresponding file settings:
 
 - `CONVERSE_HOST` → `host` — default `127.0.0.1`
 - `CONVERSE_PORT` → `port` — default `45839`
 - `CONVERSE_STT_PROVIDER` → `sttProvider` — independently selects `openai`, `groq`, `speaches`, `whisper.cpp`, or the compatibility alias `local` for transcription
-- `CONVERSE_TTS_PROVIDER` → `ttsProvider` — independently selects `openai`, `kokoro`, `piper`, `speaches-kokoro`, or the compatibility alias `local` for speech
+- `CONVERSE_TTS_PROVIDER` → `ttsProvider` — independently selects `openai`, `kokoro`, `piper`, `pocket-tts`, `speaches-kokoro`, or the compatibility alias `local` for speech
 - `OPENAI_STT_API_KEY` → `sttApiKey` — legacy environment fallback used only for OpenAI transcription; set `sttApiKey` in the file for Groq or optional loopback Speaches authentication
 - `OPENAI_TTS_API_KEY` → `ttsApiKey` — legacy environment fallback used only for OpenAI speech; set `ttsApiKey` in the file for optional loopback Speaches Kokoro or Piper authentication
 - `CONVERSE_VOICE_PROVIDER` → legacy `voiceProvider` — coupled fallback for both providers
@@ -235,10 +262,10 @@ Legacy environment variables and their corresponding file settings:
 - `WHISPER_MODEL` → `whisperModel` — defaults to `gpt-4o-transcribe` on OpenAI, `whisper-large-v3-turbo` on Groq, `Systran/faster-distil-whisper-small.en` on Speaches, `base.en` for explicit `whisper.cpp`, or `base` for legacy `local`
 - `WHISPER_LANGUAGE` → `whisperLanguage` — default `en`
 - `WHISPER_INITIAL_PROMPT` → `whisperPrompt` — default empty
-- `KOKORO_URL` → `kokoroUrl` — speech URL; defaults to OpenAI, `http://localhost:8000/v1/audio/speech` for Speaches Kokoro ONNX or Piper, or `http://localhost:8880/v1/audio/speech` for other Kokoro-compatible providers
-- `CONVERSE_TTS_VOICE` → `kokoroVoice` — defaults to `alloy` on OpenAI, `lessac` on Piper, or `af_heart` on Kokoro-compatible providers (`KOKORO_VOICE` remains a compatibility fallback)
-- `KOKORO_MODEL` → `kokoroModel` — defaults to `gpt-4o-mini-tts` on OpenAI, `speaches-ai/Kokoro-82M-v1.0-ONNX` on Speaches Kokoro ONNX, `speaches-ai/piper-en_US-lessac-medium` on Piper, or `kokoro` locally
-- `CONVERSE_TTS_SPEED` → `ttsSpeed` — OpenAI and Speaches Piper accept `0.25` to `4`; Speaches Kokoro ONNX accepts `0.5` to `2`; default `1.25`
+- `KOKORO_URL` → `kokoroUrl` — speech URL; defaults to OpenAI, `http://localhost:8000/v1/audio/speech` for Speaches Kokoro ONNX or Piper, `http://localhost:8000/tts` for official Pocket TTS, or `http://localhost:8880/v1/audio/speech` for other Kokoro-compatible providers
+- `CONVERSE_TTS_VOICE` → `kokoroVoice` — defaults to `alloy` on OpenAI, `lessac` on Piper, `alba` on Pocket TTS, or `af_heart` on Kokoro-compatible providers (`KOKORO_VOICE` remains a compatibility fallback)
+- `KOKORO_MODEL` → `kokoroModel` — defaults to `gpt-4o-mini-tts` on OpenAI, `speaches-ai/Kokoro-82M-v1.0-ONNX` on Speaches Kokoro ONNX, `speaches-ai/piper-en_US-lessac-medium` on Piper, `pocket-tts` as a compatibility label for Pocket TTS, or `kokoro` locally; the official Pocket API does not receive this field
+- `CONVERSE_TTS_SPEED` → `ttsSpeed` — OpenAI and Speaches Piper accept `0.25` to `4`; Speaches Kokoro ONNX accepts `0.5` to `2`; default `1.25`; the official Pocket API does not receive this field
 - `CONVERSE_VOICE_WAIT_MS` → `voiceWaitMs` — maximum time the Pi model's `wait_for_voice` tool waits for continuation of an unfinished thought; default `5000`
 - `CONVERSE_RECORDER_COMMAND` → `recorderCommand` — default `parecord`
 - `CONVERSE_RECORDER_DEVICE` → `recorderDevice` — default `default` (used only by the `arecord` fallback)

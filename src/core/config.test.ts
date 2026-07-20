@@ -509,6 +509,62 @@ describe("loadConfig", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  it("selects official Pocket TTS with safe local defaults", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
+    const path = join(directory, "config.json");
+
+    writeFileSync(path, JSON.stringify({ sttProvider: "whisper.cpp", ttsProvider: "pocket-tts" }));
+    expect(loadConfig(path)).toMatchObject({
+      sttProvider: "whisper.cpp",
+      ttsProvider: "pocket-tts",
+      voiceProvider: "local",
+      ttsApiKey: undefined,
+      kokoroUrl: "http://localhost:8000/tts",
+      kokoroModel: "pocket-tts",
+      kokoroVoice: "alba",
+    });
+
+    writeFileSync(path, JSON.stringify({
+      sttProvider: "whisper.cpp",
+      ttsProvider: "pocket-tts",
+      kokoroUrl: "https://127.0.0.1:8443/tts",
+      kokoroVoice: "anna",
+    }));
+    expect(loadConfig(path)).toMatchObject({
+      ttsProvider: "pocket-tts",
+      kokoroUrl: "https://127.0.0.1:8443/tts",
+      kokoroVoice: "anna",
+    });
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("restricts Pocket TTS to its unauthenticated loopback API", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
+    const path = join(directory, "config.json");
+
+    for (const kokoroUrl of [
+      "http://pocket.lan:8000/tts",
+      "http://localhost:8000/not-tts",
+      "http://user:password@localhost:8000/tts",
+      "http://localhost:8000/tts?voice=alba",
+    ]) {
+      writeFileSync(path, JSON.stringify({
+        sttProvider: "whisper.cpp",
+        ttsProvider: "pocket-tts",
+        kokoroUrl,
+      }));
+      expect(() => loadConfig(path)).toThrow(/loopback.*\/tts/);
+    }
+
+    writeFileSync(path, JSON.stringify({
+      sttProvider: "whisper.cpp",
+      ttsProvider: "pocket-tts",
+      ttsApiKey: "unsupported-secret",
+    }));
+    expect(() => loadConfig(path)).toThrow(/ttsApiKey.*unsupported.*official server/i);
+    rmSync(directory, { recursive: true, force: true });
+  });
+
   it("selects whisper.cpp explicitly with local defaults and no API key", () => {
     const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
     const path = join(directory, "config.json");

@@ -63,6 +63,15 @@ const piperConfig = (ttsApiKey?: string) => ({
   ttsSpeed: 1.25,
 });
 
+const pocketTtsConfig = () => ({
+  ...whisperCppConfig(),
+  ttsProvider: "pocket-tts" as const,
+  ttsApiKey: undefined,
+  kokoroUrl: "http://localhost:8000/tts",
+  kokoroModel: "pocket-tts",
+  kokoroVoice: "alba",
+});
+
 const groqConfig = () => ({
   ...kokoroConfig(),
   sttProvider: "groq" as const,
@@ -284,6 +293,24 @@ describe("ConverseService API authentication", () => {
     });
   });
 
+  it("uses the official Pocket TTS multipart API without credentials or OpenAI fields", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(Buffer.from("wav"), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new ConverseService(pocketTtsConfig(), "test-owner") as unknown as ServiceInternals;
+
+    await service.synthesize("hello");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://localhost:8000/tts");
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const headers = new Headers(request.headers);
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("content-type")).toBeNull();
+    const form = request.body as FormData;
+    expect(form.get("text")).toBe("hello");
+    expect(form.get("voice_url")).toBe("alba");
+    expect([...form.keys()].sort()).toEqual(["text", "voice_url"]);
+  });
+
   it("keeps keyless Speaches Piper speech unauthenticated and its TTS key off STT", async () => {
     const speechFetch = vi.fn().mockResolvedValue(new Response(Buffer.from("wav"), { status: 200 }));
     vi.stubGlobal("fetch", speechFetch);
@@ -335,6 +362,15 @@ describe("ConverseService API authentication", () => {
 
     await expect(service.synthesize("hello")).rejects.toThrow(
       "Speaches Piper speech request failed: 503: model unavailable",
+    );
+  });
+
+  it("identifies official Pocket TTS speech failures", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("model unavailable", { status: 503 })));
+    const service = new ConverseService(pocketTtsConfig(), "test-owner") as unknown as ServiceInternals;
+
+    await expect(service.synthesize("hello")).rejects.toThrow(
+      "Pocket TTS speech request failed: 503: model unavailable",
     );
   });
 
@@ -405,6 +441,57 @@ describe("ConverseService API authentication", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const spoken = fetchMock.mock.calls.map((call) => JSON.parse((call[1] as RequestInit).body as string).input);
+    expect(spoken).toEqual(["First sentence.", "Second sentence."]);
+  });
+
+  it("starts Pocket TTS playback from the response stream without buffering the whole WAV", async () => {
+    let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        streamController = controller;
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 200 })));
+    const service = new ConverseService(pocketTtsConfig(), "test-owner");
+    let firstAudio: Uint8Array | undefined;
+    (service as unknown as { playWavStream: (response: Response) => Promise<void> }).playWavStream = async (response) => {
+      const reader = response.body!.getReader();
+      firstAudio = (await reader.read()).value;
+      await reader.cancel();
+    };
+
+    await expect(service.speak("Stream this response.", "test-owner")).resolves.toBe(true);
+
+    expect(firstAudio).toEqual(new Uint8Array([1, 2, 3]));
+    expect(streamController).toBeDefined();
+  });
+
+  it("aborts an in-flight Pocket TTS request when speaking stops", async () => {
+    let requestSignal: AbortSignal | undefined;
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      requestSignal = init.signal as AbortSignal;
+      return new Promise<Response>(() => undefined);
+    }));
+    const service = new ConverseService(pocketTtsConfig(), "test-owner");
+
+    void service.speak("Still synthesizing.", "test-owner");
+    await vi.waitFor(() => expect(requestSignal).toBeDefined());
+    service.stopSpeaking();
+
+    expect(requestSignal?.aborted).toBe(true);
+  });
+
+  it("keeps long Pocket TTS replies sentence-chunked while streaming each response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(Buffer.from("wav"), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new ConverseService(pocketTtsConfig(), "test-owner");
+    (service as unknown as { playWavStream: () => Promise<void> }).playWavStream = async () => undefined;
+
+    await service.speak("First sentence. Second sentence.", "test-owner");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const spoken = fetchMock.mock.calls.map((call) => ((call[1] as RequestInit).body as FormData).get("text"));
     expect(spoken).toEqual(["First sentence.", "Second sentence."]);
   });
 

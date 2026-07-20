@@ -1,4 +1,4 @@
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { spawn, type ChildProcess } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { ConverseConfig } from "./config.js";
@@ -83,6 +83,9 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
       if (this.config.ttsProvider === "openai") {
         return await this.speakHostedChunks(chunks, generation, abortController.signal);
       }
+      if (this.config.ttsProvider === "pocket-tts") {
+        return await this.speakPocketChunks(chunks, generation, abortController.signal);
+      }
 
       for (const chunk of chunks) {
         if (generation !== this.speakGeneration) return false;
@@ -134,6 +137,18 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
     }
 
     return true;
+  }
+
+  private async speakPocketChunks(chunks: SpeechChunk[], generation: number, signal: AbortSignal): Promise<boolean> {
+    for (const chunk of chunks) {
+      if (generation !== this.speakGeneration) return false;
+      const response = await this.requestPocketSpeech(chunk.text, signal);
+      if (generation !== this.speakGeneration) return false;
+      await this.playWavStream(response, generation, signal);
+      if (generation !== this.speakGeneration) return false;
+      if (chunk.pauseSeconds > 0) await sleep(chunk.pauseSeconds * 1000, undefined, { signal });
+    }
+    return chunks.length > 0;
   }
 
   private onRecorderData(chunk: Buffer): void {
@@ -203,6 +218,11 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
   }
 
   private async synthesize(text: string, signal?: AbortSignal): Promise<Buffer> {
+    if (this.config.ttsProvider === "pocket-tts") {
+      const response = await this.requestPocketSpeech(text, signal);
+      return Buffer.from(await response.arrayBuffer());
+    }
+
     const timeoutSignal = AbortSignal.timeout(this.config.apiTimeoutMs);
     const response = await fetch(this.config.kokoroUrl, {
       method: "POST",
@@ -220,6 +240,20 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
     });
     if (!response.ok) throw await this.requestError("speech", response);
     return Buffer.from(await response.arrayBuffer());
+  }
+
+  private async requestPocketSpeech(text: string, signal?: AbortSignal): Promise<Response> {
+    const form = new FormData();
+    form.set("text", text);
+    form.set("voice_url", this.config.kokoroVoice);
+    const timeoutSignal = AbortSignal.timeout(this.config.apiTimeoutMs);
+    const response = await fetch(this.config.kokoroUrl, {
+      method: "POST",
+      body: form,
+      signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
+    });
+    if (!response.ok) throw await this.requestError("speech", response);
+    return response;
   }
 
   private apiHeaders(operation: "transcription" | "speech", contentType?: string): Headers {
@@ -246,7 +280,9 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
                 ? "Speaches Kokoro ONNX"
                 : provider === "piper"
                   ? "Speaches Piper"
-                  : operation === "transcription"
+                  : provider === "pocket-tts"
+                    ? "Pocket TTS"
+                    : operation === "transcription"
                 ? "Whisper"
                 : "Kokoro";
     const detail = (await response.text()).trim().replace(/\s+/g, " ").slice(0, 500);
@@ -303,6 +339,51 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
       child.stdin.on("error", reject);
       child.stdin.end(wav);
     });
+  }
+
+  private async playWavStream(response: Response, generation: number, signal: AbortSignal): Promise<void> {
+    if (!response.body) throw new Error("Pocket TTS speech response had no audio stream");
+    const command = this.config.playerCommand.split("/").pop() ?? this.config.playerCommand;
+    const args = command === "paplay"
+      ? [...this.config.playerAdditionalArgs]
+      : ["-q", ...this.config.playerAdditionalArgs, "-"];
+    const child = spawn(this.config.playerCommand, args, { stdio: ["pipe", "ignore", "pipe"] });
+    this.activeTts = child;
+    child.stderr.on("data", () => undefined);
+    child.stdin.on("error", () => undefined);
+    const closed = new Promise<void>((resolve, reject) => {
+      child.on("error", reject);
+      child.on("close", (code, childSignal) => {
+        if (this.activeTts === child) this.activeTts = undefined;
+        if (generation !== this.speakGeneration || childSignal === "SIGTERM") {
+          resolve();
+          return;
+        }
+        if (code === 0) resolve();
+        else reject(new Error(`Player exited unexpectedly: code=${code} signal=${childSignal}`));
+      });
+    });
+    void closed.catch(() => undefined);
+
+    const reader = response.body.getReader();
+    let completed = false;
+    try {
+      while (true) {
+        const next = await reader.read();
+        if (next.done) break;
+        if (!child.stdin.write(next.value)) await once(child.stdin, "drain", { signal });
+      }
+      child.stdin.end();
+      await closed;
+      completed = true;
+    } finally {
+      if (!completed) {
+        await reader.cancel().catch(() => undefined);
+        if (child.exitCode === null && !child.killed) child.kill("SIGTERM");
+      }
+      if (this.activeTts === child) this.activeTts = undefined;
+      reader.releaseLock();
+    }
   }
 
   private async playWavViaTempFile(wav: Buffer, generation: number): Promise<void> {
