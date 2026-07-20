@@ -1,5 +1,11 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadConfig } from "./config.js";
+import { defaultConfigPath, loadConfig } from "./config.js";
+
+const missingConfigPath = join(tmpdir(), "claude-converse-test-missing", "config.json");
+const loadEnvConfig = () => loadConfig(missingConfigPath);
 
 const configEnv = [
   "CONVERSE_PORT",
@@ -36,7 +42,7 @@ describe("loadConfig", () => {
   it("falls back on invalid numeric env vars", () => {
     process.env.CONVERSE_PORT = "abc";
     process.env.VAD_BARGE_IN_ENERGY_MULT = "nan";
-    const config = loadConfig();
+    const config = loadEnvConfig();
     expect(config.port).toBe(45839);
     expect(config.vadBargeInEnergyMultiplier).toBe(2);
     expect(config.vadUtteranceEndFrames).toBe(60);
@@ -44,13 +50,13 @@ describe("loadConfig", () => {
 
   it("rejects unsupported bytes-per-sample values", () => {
     process.env.CONVERSE_BYTES_PER_SAMPLE = "4";
-    expect(() => loadConfig()).toThrow(/unsupported/);
+    expect(() => loadEnvConfig()).toThrow(/unsupported/);
   });
 
   it("automatically uses OpenAI when its API key is available", () => {
     process.env.OPENAI_API_KEY = "test-key";
 
-    const config = loadConfig();
+    const config = loadEnvConfig();
 
     expect(config).toMatchObject({
       voiceProvider: "openai",
@@ -71,14 +77,14 @@ describe("loadConfig", () => {
     process.env.CONVERSE_TTS_VOICE = "marin";
     process.env.KOKORO_VOICE = "legacy-voice";
 
-    expect(loadConfig().kokoroVoice).toBe("marin");
+    expect(loadEnvConfig().kokoroVoice).toBe("marin");
   });
 
   it("permits opting out of OpenAI and retaining the local defaults", () => {
     process.env.OPENAI_API_KEY = "test-key";
     process.env.CONVERSE_VOICE_PROVIDER = "local";
 
-    const config = loadConfig();
+    const config = loadEnvConfig();
 
     expect(config).toMatchObject({
       voiceProvider: "local",
@@ -93,22 +99,86 @@ describe("loadConfig", () => {
 
   it("requires a key when OpenAI is explicitly selected", () => {
     process.env.CONVERSE_VOICE_PROVIDER = "openai";
-    expect(() => loadConfig()).toThrow(/OPENAI_API_KEY/);
+    expect(() => loadEnvConfig()).toThrow(/apiKey/);
   });
 
   it("does not send the OpenAI key to a URL override", () => {
     process.env.OPENAI_API_KEY = "test-key";
     process.env.WHISPER_URL = "http://localhost:2022/v1/audio/transcriptions";
-    expect(() => loadConfig()).toThrow(/must use https:\/\/api\.openai\.com/);
+    expect(() => loadEnvConfig()).toThrow(/must use https:\/\/api\.openai\.com/);
   });
 
   it("rejects non-positive API timeouts", () => {
     process.env.CONVERSE_API_TIMEOUT_MS = "0";
-    expect(() => loadConfig()).toThrow(/positive integer/);
+    expect(() => loadEnvConfig()).toThrow(/positive number/);
   });
 
   it("rejects unsupported speech speeds", () => {
     process.env.CONVERSE_TTS_SPEED = "4.1";
-    expect(() => loadConfig()).toThrow(/between 0.25 and 4/);
+    expect(() => loadEnvConfig()).toThrow(/between 0.25 and 4/);
   });
+
+  it("loads explicit file settings ahead of environment fallbacks", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
+    const path = join(directory, "config.json");
+    process.env.CONVERSE_PORT = "1000";
+    process.env.OPENAI_API_KEY = "environment-key";
+    writeFileSync(path, JSON.stringify({
+      voiceProvider: "local",
+      apiKey: "file-key",
+      port: 2345,
+      sampleRate: 48_000,
+      recorderAdditionalArgs: ["--raw", "--verbose"],
+      statusPrefix: "voice: ",
+      kokoroVoice: "af_sky",
+    }));
+
+    expect(loadConfig(path)).toMatchObject({
+      voiceProvider: "local",
+      apiKey: undefined,
+      port: 2345,
+      sampleRate: 48_000,
+      recorderAdditionalArgs: ["--raw", "--verbose"],
+      statusPrefix: "voice: ",
+      kokoroVoice: "af_sky",
+    });
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("accepts a complete OpenAI configuration without environment variables", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
+    const path = join(directory, "config.json");
+    writeFileSync(path, JSON.stringify({ voiceProvider: "openai", apiKey: "file-key", ttsSpeed: 1.5 }));
+
+    expect(loadConfig(path)).toMatchObject({
+      voiceProvider: "openai",
+      apiKey: "file-key",
+      whisperModel: "gpt-4o-transcribe",
+      kokoroModel: "gpt-4o-mini-tts",
+      ttsSpeed: 1.5,
+    });
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("reports malformed, unknown, and incorrectly typed file settings", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
+    const path = join(directory, "config.json");
+
+    writeFileSync(path, "{");
+    expect(() => loadConfig(path)).toThrow(/Invalid JSON.*config\.json/);
+    writeFileSync(path, JSON.stringify({ typoSetting: true }));
+    expect(() => loadConfig(path)).toThrow(/Unknown.*typoSetting/);
+    writeFileSync(path, JSON.stringify({ port: "45839" }));
+    expect(() => loadConfig(path)).toThrow(/port.*must be number/);
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("uses the XDG configuration directory by default", () => {
+    const original = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = "/tmp/test-xdg";
+    expect(defaultConfigPath()).toBe("/tmp/test-xdg/claude-converse/config.json");
+    if (original === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = original;
+  });
+
 });

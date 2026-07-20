@@ -1,3 +1,7 @@
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 export interface ConverseConfig {
   sampleRate: number;
   channels: number;
@@ -36,6 +40,83 @@ export interface ConverseConfig {
   port: number;
 }
 
+type FileConfig = Partial<ConverseConfig>;
+type ValueKind = "number" | "string" | "string[]" | "provider";
+
+const fileConfigKinds: Record<keyof ConverseConfig, ValueKind> = {
+  sampleRate: "number",
+  channels: "number",
+  bytesPerSample: "number",
+  frameDurationMs: "number",
+  vadThreshold: "number",
+  vadSpeechStartFrames: "number",
+  vadChunkSilenceFrames: "number",
+  vadUtteranceEndFrames: "number",
+  vadMinUtteranceFrames: "number",
+  vadBargeInEnergyMultiplier: "number",
+  vadBargeInFrames: "number",
+  vadPreBufferFrames: "number",
+  recentMaxEntries: "number",
+  statusWindowSeconds: "number",
+  statusPrefix: "string",
+  statusSeparator: "string",
+  voiceProvider: "provider",
+  apiKey: "string",
+  apiTimeoutMs: "number",
+  whisperUrl: "string",
+  whisperModel: "string",
+  whisperLanguage: "string",
+  whisperPrompt: "string",
+  kokoroUrl: "string",
+  kokoroVoice: "string",
+  kokoroModel: "string",
+  ttsSpeed: "number",
+  voiceWaitMs: "number",
+  recorderCommand: "string",
+  recorderDevice: "string",
+  recorderAdditionalArgs: "string[]",
+  playerCommand: "string",
+  playerAdditionalArgs: "string[]",
+  host: "string",
+  port: "number",
+};
+
+export const defaultConfigPath = (): string =>
+  join(process.env.XDG_CONFIG_HOME?.trim() || join(homedir(), ".config"), "claude-converse", "config.json");
+
+const readFileConfig = (path: string): FileConfig => {
+  let source: string;
+  try {
+    source = readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw new Error(`Cannot read Converse config ${path}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  let value: unknown;
+  try {
+    value = JSON.parse(source);
+  } catch (error) {
+    throw new Error(`Invalid JSON in Converse config ${path}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Converse config ${path} must contain a JSON object`);
+  }
+
+  const config = value as Record<string, unknown>;
+  for (const [key, item] of Object.entries(config)) {
+    const kind = fileConfigKinds[key as keyof ConverseConfig];
+    if (!kind) throw new Error(`Unknown Converse config setting ${key} in ${path}`);
+    const valid = kind === "string[]"
+      ? Array.isArray(item) && item.every((entry) => typeof entry === "string")
+      : kind === "provider"
+        ? item === "local" || item === "openai"
+        : typeof item === kind && (kind !== "number" || Number.isFinite(item));
+    if (!valid) throw new Error(`Converse config setting ${key} in ${path} must be ${kind}`);
+  }
+  return config as FileConfig;
+};
+
 const intEnv = (name: string, fallback: number): number => {
   const value = process.env[name];
   if (!value) return fallback;
@@ -52,11 +133,10 @@ const floatEnv = (name: string, fallback: number): number => {
 
 const stringListEnv = (name: string): string[] => {
   const value = process.env[name]?.trim();
-  if (!value) return [];
-  return value.split(/\s+/g);
+  return value ? value.split(/\s+/g) : [];
 };
 
-const voiceProvider = (): "local" | "openai" => {
+const envVoiceProvider = (): "local" | "openai" => {
   const configured = process.env.CONVERSE_VOICE_PROVIDER?.trim().toLowerCase();
   if (!configured) return process.env.OPENAI_API_KEY?.trim() ? "openai" : "local";
   if (configured === "local" || configured === "openai") return configured;
@@ -72,70 +152,61 @@ const isOpenAiUrl = (value: string): boolean => {
   }
 };
 
-export const loadConfig = (): ConverseConfig => {
-  const bytesPerSample = intEnv("CONVERSE_BYTES_PER_SAMPLE", 2);
-  if (bytesPerSample !== 2) {
-    throw new Error(`CONVERSE_BYTES_PER_SAMPLE=${bytesPerSample} is unsupported; only 2-byte S16_LE audio is supported`);
-  }
+export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
+  const file = readFileConfig(path);
+  const provider = file.voiceProvider ?? envVoiceProvider();
+  const apiKey = provider === "openai" ? (file.apiKey ?? process.env.OPENAI_API_KEY?.trim()) : undefined;
+  const bytesPerSample = file.bytesPerSample ?? intEnv("CONVERSE_BYTES_PER_SAMPLE", 2);
+  const apiTimeoutMs = file.apiTimeoutMs ?? intEnv("CONVERSE_API_TIMEOUT_MS", 60_000);
+  const ttsSpeed = file.ttsSpeed ?? floatEnv("CONVERSE_TTS_SPEED", 1.25);
+  const voiceWaitMs = file.voiceWaitMs ?? intEnv("CONVERSE_VOICE_WAIT_MS", 5_000);
+  const whisperUrl = file.whisperUrl ?? process.env.WHISPER_URL ?? (provider === "openai" ? "https://api.openai.com/v1/audio/transcriptions" : "http://localhost:2022/v1/audio/transcriptions");
+  const kokoroUrl = file.kokoroUrl ?? process.env.KOKORO_URL ?? (provider === "openai" ? "https://api.openai.com/v1/audio/speech" : "http://localhost:8880/v1/audio/speech");
 
-  const provider = voiceProvider();
-  const apiKey = provider === "openai" ? process.env.OPENAI_API_KEY?.trim() : undefined;
-  if (provider === "openai" && !apiKey) {
-    throw new Error("OPENAI_API_KEY must be set when CONVERSE_VOICE_PROVIDER=openai");
-  }
-  const apiTimeoutMs = intEnv("CONVERSE_API_TIMEOUT_MS", 60_000);
-  if (apiTimeoutMs <= 0) {
-    throw new Error("CONVERSE_API_TIMEOUT_MS must be a positive integer");
-  }
-  const ttsSpeed = floatEnv("CONVERSE_TTS_SPEED", 1.25);
-  if (ttsSpeed < 0.25 || ttsSpeed > 4) {
-    throw new Error("CONVERSE_TTS_SPEED must be between 0.25 and 4");
-  }
-  const voiceWaitMs = intEnv("CONVERSE_VOICE_WAIT_MS", 5_000);
-  if (voiceWaitMs <= 0) {
-    throw new Error("CONVERSE_VOICE_WAIT_MS must be a positive integer");
-  }
-  const whisperUrl = process.env.WHISPER_URL ?? (provider === "openai" ? "https://api.openai.com/v1/audio/transcriptions" : "http://localhost:2022/v1/audio/transcriptions");
-  const kokoroUrl = process.env.KOKORO_URL ?? (provider === "openai" ? "https://api.openai.com/v1/audio/speech" : "http://localhost:8880/v1/audio/speech");
+  if (bytesPerSample !== 2) throw new Error(`bytesPerSample=${bytesPerSample} is unsupported; only 2-byte S16_LE audio is supported`);
+  if (provider === "openai" && !apiKey) throw new Error(`apiKey must be set in ${path} when voiceProvider is openai`);
+  if (apiTimeoutMs <= 0) throw new Error("apiTimeoutMs must be a positive number");
+  if (ttsSpeed < 0.25 || ttsSpeed > 4) throw new Error("ttsSpeed must be between 0.25 and 4");
+  if (voiceWaitMs <= 0) throw new Error("voiceWaitMs must be a positive number");
   if (provider === "openai" && (!isOpenAiUrl(whisperUrl) || !isOpenAiUrl(kokoroUrl))) {
-    throw new Error("WHISPER_URL and KOKORO_URL must use https://api.openai.com when CONVERSE_VOICE_PROVIDER=openai");
+    throw new Error("whisperUrl and kokoroUrl must use https://api.openai.com when voiceProvider is openai");
   }
 
   return {
-  sampleRate: intEnv("CONVERSE_SAMPLE_RATE", 16_000),
-  channels: intEnv("CONVERSE_CHANNELS", 1),
-  bytesPerSample,
-  frameDurationMs: intEnv("CONVERSE_FRAME_DURATION_MS", 30),
-  vadThreshold: intEnv("VAD_THRESHOLD", 300),
-  vadSpeechStartFrames: intEnv("VAD_SPEECH_START_FRAMES", 3),
-  vadChunkSilenceFrames: intEnv("VAD_CHUNK_SILENCE_FRAMES", 20),
-  vadUtteranceEndFrames: intEnv("VAD_UTTERANCE_END_FRAMES", 60),
-  vadMinUtteranceFrames: intEnv("VAD_MIN_UTTERANCE_FRAMES", 10),
-  vadBargeInEnergyMultiplier: floatEnv("VAD_BARGE_IN_ENERGY_MULT", 2.0),
-  vadBargeInFrames: intEnv("VAD_BARGE_IN_FRAMES", 6),
-  vadPreBufferFrames: intEnv("VAD_PRE_BUFFER_FRAMES", 10),
-  recentMaxEntries: intEnv("RECENT_MAX_ENTRIES", 50),
-  statusWindowSeconds: intEnv("CONVERSE_STATUS_WINDOW", 30),
-  statusPrefix: process.env.CONVERSE_STATUS_PREFIX ?? "🎤 ",
-  statusSeparator: process.env.CONVERSE_STATUS_SEPARATOR ?? " | ",
-  voiceProvider: provider,
-  apiKey,
-  apiTimeoutMs,
-  whisperUrl,
-  whisperModel: process.env.WHISPER_MODEL ?? (provider === "openai" ? "gpt-4o-transcribe" : "base"),
-  whisperLanguage: process.env.WHISPER_LANGUAGE ?? "en",
-  whisperPrompt: process.env.WHISPER_INITIAL_PROMPT ?? "",
-  kokoroUrl,
-  kokoroVoice: process.env.CONVERSE_TTS_VOICE ?? process.env.KOKORO_VOICE ?? (provider === "openai" ? "alloy" : "af_heart"),
-  kokoroModel: process.env.KOKORO_MODEL ?? (provider === "openai" ? "gpt-4o-mini-tts" : "kokoro"),
-  ttsSpeed,
-  voiceWaitMs,
-  recorderCommand: process.env.CONVERSE_RECORDER_COMMAND ?? "parecord",
-  recorderDevice: process.env.CONVERSE_RECORDER_DEVICE ?? "default",
-  recorderAdditionalArgs: stringListEnv("CONVERSE_RECORDER_ARGS"),
-  playerCommand: process.env.CONVERSE_PLAYER_COMMAND ?? "paplay",
-  playerAdditionalArgs: stringListEnv("CONVERSE_PLAYER_ARGS"),
-  host: process.env.CONVERSE_HOST ?? "127.0.0.1",
-  port: intEnv("CONVERSE_PORT", 45839),
-};
+    sampleRate: file.sampleRate ?? intEnv("CONVERSE_SAMPLE_RATE", 16_000),
+    channels: file.channels ?? intEnv("CONVERSE_CHANNELS", 1),
+    bytesPerSample,
+    frameDurationMs: file.frameDurationMs ?? intEnv("CONVERSE_FRAME_DURATION_MS", 30),
+    vadThreshold: file.vadThreshold ?? intEnv("VAD_THRESHOLD", 300),
+    vadSpeechStartFrames: file.vadSpeechStartFrames ?? intEnv("VAD_SPEECH_START_FRAMES", 3),
+    vadChunkSilenceFrames: file.vadChunkSilenceFrames ?? intEnv("VAD_CHUNK_SILENCE_FRAMES", 20),
+    vadUtteranceEndFrames: file.vadUtteranceEndFrames ?? intEnv("VAD_UTTERANCE_END_FRAMES", 60),
+    vadMinUtteranceFrames: file.vadMinUtteranceFrames ?? intEnv("VAD_MIN_UTTERANCE_FRAMES", 10),
+    vadBargeInEnergyMultiplier: file.vadBargeInEnergyMultiplier ?? floatEnv("VAD_BARGE_IN_ENERGY_MULT", 2.0),
+    vadBargeInFrames: file.vadBargeInFrames ?? intEnv("VAD_BARGE_IN_FRAMES", 6),
+    vadPreBufferFrames: file.vadPreBufferFrames ?? intEnv("VAD_PRE_BUFFER_FRAMES", 10),
+    recentMaxEntries: file.recentMaxEntries ?? intEnv("RECENT_MAX_ENTRIES", 50),
+    statusWindowSeconds: file.statusWindowSeconds ?? intEnv("CONVERSE_STATUS_WINDOW", 30),
+    statusPrefix: file.statusPrefix ?? process.env.CONVERSE_STATUS_PREFIX ?? "🎤 ",
+    statusSeparator: file.statusSeparator ?? process.env.CONVERSE_STATUS_SEPARATOR ?? " | ",
+    voiceProvider: provider,
+    apiKey,
+    apiTimeoutMs,
+    whisperUrl,
+    whisperModel: file.whisperModel ?? process.env.WHISPER_MODEL ?? (provider === "openai" ? "gpt-4o-transcribe" : "base"),
+    whisperLanguage: file.whisperLanguage ?? process.env.WHISPER_LANGUAGE ?? "en",
+    whisperPrompt: file.whisperPrompt ?? process.env.WHISPER_INITIAL_PROMPT ?? "",
+    kokoroUrl,
+    kokoroVoice: file.kokoroVoice ?? process.env.CONVERSE_TTS_VOICE ?? process.env.KOKORO_VOICE ?? (provider === "openai" ? "alloy" : "af_heart"),
+    kokoroModel: file.kokoroModel ?? process.env.KOKORO_MODEL ?? (provider === "openai" ? "gpt-4o-mini-tts" : "kokoro"),
+    ttsSpeed,
+    voiceWaitMs,
+    recorderCommand: file.recorderCommand ?? process.env.CONVERSE_RECORDER_COMMAND ?? "parecord",
+    recorderDevice: file.recorderDevice ?? process.env.CONVERSE_RECORDER_DEVICE ?? "default",
+    recorderAdditionalArgs: file.recorderAdditionalArgs ?? stringListEnv("CONVERSE_RECORDER_ARGS"),
+    playerCommand: file.playerCommand ?? process.env.CONVERSE_PLAYER_COMMAND ?? "paplay",
+    playerAdditionalArgs: file.playerAdditionalArgs ?? stringListEnv("CONVERSE_PLAYER_ARGS"),
+    host: file.host ?? process.env.CONVERSE_HOST ?? "127.0.0.1",
+    port: file.port ?? intEnv("CONVERSE_PORT", 45839),
+  };
 };
