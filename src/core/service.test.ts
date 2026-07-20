@@ -43,6 +43,16 @@ const kokoroConfig = () => ({
   kokoroVoice: "af_heart",
 });
 
+const groqConfig = () => ({
+  ...kokoroConfig(),
+  sttProvider: "groq" as const,
+  sttApiKey: "groq-key",
+  whisperUrl: "https://api.groq.com/openai/v1/audio/transcriptions",
+  whisperModel: "whisper-large-v3-turbo",
+  whisperLanguage: "en",
+  whisperPrompt: "Programming terms",
+});
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("ConverseService API authentication", () => {
@@ -71,6 +81,44 @@ describe("ConverseService API authentication", () => {
     expect(form.get("model")).toBe("base.en");
     expect(form.get("language")).toBe("en");
     expect(form.get("prompt")).toBe("Programming terms");
+  });
+
+  it("sends Groq its supported multipart fields and only the STT key", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ text: "hello" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new ConverseService(groqConfig(), "test-owner") as unknown as ServiceInternals;
+
+    await service.transcribe(Buffer.alloc(960));
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.groq.com/openai/v1/audio/transcriptions");
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(request.headers).get("authorization")).toBe("Bearer groq-key");
+    const form = request.body as FormData;
+    expect(form.get("model")).toBe("whisper-large-v3-turbo");
+    expect(form.get("response_format")).toBe("json");
+    expect(form.get("language")).toBe("en");
+    expect(form.get("prompt")).toBe("Programming terms");
+    expect(form.get("file")).toBeInstanceOf(Blob);
+  });
+
+  it("never attaches the Groq STT key to Kokoro speech", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(Buffer.from("wav"), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new ConverseService(groqConfig(), "test-owner") as unknown as ServiceInternals;
+
+    await service.synthesize("hello");
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(request.headers).get("authorization")).toBeNull();
+  });
+
+  it("identifies Groq transcription failures", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("rate limit", { status: 429 })));
+    const service = new ConverseService(groqConfig(), "test-owner") as unknown as ServiceInternals;
+
+    await expect(service.transcribe(Buffer.alloc(960))).rejects.toThrow(
+      "Groq transcription request failed: 429: rate limit",
+    );
   });
 
   it("identifies whisper.cpp transcription failures", async () => {

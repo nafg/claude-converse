@@ -275,6 +275,47 @@ describe("loadConfig", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  it("selects Groq independently with hosted defaults and a file key", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
+    const path = join(directory, "config.json");
+    writeFileSync(path, JSON.stringify({
+      sttProvider: "groq",
+      sttApiKey: "groq-key",
+      ttsProvider: "kokoro",
+      ttsApiKey: "must-not-be-used",
+    }));
+
+    expect(loadConfig(path)).toMatchObject({
+      sttProvider: "groq",
+      ttsProvider: "kokoro",
+      sttApiKey: "groq-key",
+      ttsApiKey: undefined,
+      whisperUrl: "https://api.groq.com/openai/v1/audio/transcriptions",
+      whisperModel: "whisper-large-v3-turbo",
+      whisperLanguage: "en",
+      kokoroUrl: "http://localhost:8880/v1/audio/speech",
+    });
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("requires a Groq key and rejects every non-official transcription URL", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
+    const path = join(directory, "config.json");
+
+    writeFileSync(path, JSON.stringify({ sttProvider: "groq", ttsProvider: "local" }));
+    expect(() => loadConfig(path)).toThrow(/sttApiKey.*groq/);
+
+    for (const whisperUrl of [
+      "http://api.groq.com/openai/v1/audio/transcriptions",
+      "https://api.groq.com.evil.example/openai/v1/audio/transcriptions",
+      "https://api.groq.com/openai/v1/chat/completions",
+    ]) {
+      writeFileSync(path, JSON.stringify({ sttProvider: "groq", sttApiKey: "groq-key", ttsProvider: "local", whisperUrl }));
+      expect(() => loadConfig(path)).toThrow(/whisperUrl.*api\.groq\.com/);
+    }
+    rmSync(directory, { recursive: true, force: true });
+  });
+
   it("selects whisper.cpp explicitly with local defaults and no API key", () => {
     const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
     const path = join(directory, "config.json");

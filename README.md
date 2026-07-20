@@ -7,7 +7,7 @@ This branch rebuilds Converse around a shared **TypeScript voice core**:
 - **Claude adapter**: runs a localhost HTTP daemon
 - **Pi adapter**: runs the same service in-process inside the extension
 - **Linux audio tools**: microphone capture via `parecord`, playback via `paplay` by default
-- **Independent STT/TTS backends**: mix local whisper.cpp/Kokoro HTTP with OpenAI's hosted Audio API
+- **Independent STT/TTS backends**: mix local whisper.cpp/Kokoro HTTP with hosted OpenAI or Groq audio APIs
 
 ## Current architecture
 
@@ -39,8 +39,8 @@ You need:
 
 - Node.js
 - `parecord` / `paplay` (usually from PulseAudio/PipeWire Pulse tools)
-- **hosted:** an OpenAI API key stored in the user config
-- **local:** a Whisper-compatible server, a Kokoro-compatible TTS server, or one of each alongside OpenAI
+- **hosted:** an OpenAI or Groq API key stored in the user config
+- **local:** a Whisper-compatible server, a Kokoro-compatible TTS server, or one of each alongside a hosted provider
 
 ## Configuration
 
@@ -73,7 +73,27 @@ STT and TTS are selected separately. OpenAI uses `gpt-4o-transcribe` for STT and
 }
 ```
 
-Reverse the two providers and set `ttsApiKey` for local transcription with OpenAI speech. Setting both providers to local implementations keeps all audio processing on this computer; setting both to `openai` keeps it off this computer. Each OpenAI key is attached only to its own request, and OpenAI providers reject endpoints other than HTTPS URLs on `api.openai.com`.
+Reverse the two providers and set `ttsApiKey` for local transcription with OpenAI speech. Setting both providers to local implementations keeps all audio processing on this computer; setting both to `openai` keeps it off this computer. Each hosted key is attached only to its own request. OpenAI providers reject endpoints other than HTTPS URLs on `api.openai.com`, and Groq transcription accepts only its official endpoint.
+
+#### Groq transcription
+
+Groq provides a hosted, OpenAI-compatible transcription endpoint. It can be combined with any TTS provider; see the complete [`config.groq-kokoro.example.json`](config.groq-kokoro.example.json). The essential settings for Groq STT with local Kokoro are:
+
+```json
+{
+  "sttProvider": "groq",
+  "sttApiKey": "gsk_...",
+  "whisperUrl": "https://api.groq.com/openai/v1/audio/transcriptions",
+  "whisperModel": "whisper-large-v3-turbo",
+  "whisperLanguage": "en",
+  "whisperPrompt": "Programming and software-development vocabulary",
+  "ttsProvider": "kokoro"
+}
+```
+
+The endpoint and `whisper-large-v3-turbo` default follow Groq's [speech-to-text documentation](https://console.groq.com/docs/speech-to-text). Converse sends Groq the documented `file`, `model`, `response_format`, `language`, and optional `prompt` multipart fields. To prevent credential leakage, Groq mode accepts only `https://api.groq.com/openai/v1/audio/transcriptions`; its key is never attached to TTS.
+
+Groq's [pricing page](https://groq.com/pricing) states that audio is billed with a ten-second minimum per request. Converse transcribes at detected pauses, so frequent very short utterances can be billed as ten seconds each even though `whisper-large-v3-turbo` has a low hourly rate.
 
 #### whisper.cpp transcription
 
@@ -114,15 +134,15 @@ Legacy environment variables and their corresponding file settings:
 
 - `CONVERSE_HOST` → `host` — default `127.0.0.1`
 - `CONVERSE_PORT` → `port` — default `45839`
-- `CONVERSE_STT_PROVIDER` → `sttProvider` — independently selects `openai`, `whisper.cpp`, or the compatibility alias `local` for transcription
+- `CONVERSE_STT_PROVIDER` → `sttProvider` — independently selects `openai`, `groq`, `whisper.cpp`, or the compatibility alias `local` for transcription
 - `CONVERSE_TTS_PROVIDER` → `ttsProvider` — independently selects `openai`, `kokoro`, or the compatibility alias `local` for speech
-- `OPENAI_STT_API_KEY` → `sttApiKey` — used only for OpenAI transcription
+- `OPENAI_STT_API_KEY` → `sttApiKey` — legacy environment fallback used only for OpenAI transcription; set `sttApiKey` in the file for Groq
 - `OPENAI_TTS_API_KEY` → `ttsApiKey` — used only for OpenAI speech
 - `CONVERSE_VOICE_PROVIDER` → legacy `voiceProvider` — coupled fallback for both providers
 - `OPENAI_API_KEY` → legacy `apiKey` — shared fallback key for existing installations
 - `CONVERSE_API_TIMEOUT_MS` → `apiTimeoutMs` — maximum time for each transcription or speech request; default `60000`
-- `WHISPER_URL` → `whisperUrl` — transcription URL; defaults to OpenAI or `http://localhost:2022/v1/audio/transcriptions` for local providers. OpenAI mode accepts only `https://api.openai.com` URLs, so its key cannot be sent to an arbitrary override.
-- `WHISPER_MODEL` → `whisperModel` — defaults to `gpt-4o-transcribe` on OpenAI, `base.en` for explicit `whisper.cpp`, or `base` for legacy `local`
+- `WHISPER_URL` → `whisperUrl` — transcription URL; defaults to the selected hosted API or `http://localhost:2022/v1/audio/transcriptions` for local providers. Hosted modes restrict URLs to their official HTTPS endpoint so keys cannot be sent to arbitrary overrides.
+- `WHISPER_MODEL` → `whisperModel` — defaults to `gpt-4o-transcribe` on OpenAI, `whisper-large-v3-turbo` on Groq, `base.en` for explicit `whisper.cpp`, or `base` for legacy `local`
 - `WHISPER_LANGUAGE` → `whisperLanguage` — default `en`
 - `WHISPER_INITIAL_PROMPT` → `whisperPrompt` — default empty
 - `KOKORO_URL` → `kokoroUrl` — speech URL; defaults to OpenAI or `http://localhost:8880/v1/audio/speech` for Kokoro-compatible providers

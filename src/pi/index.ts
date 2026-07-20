@@ -159,9 +159,11 @@ export default function conversePiExtension(pi: ExtensionAPI) {
         await startService(ctx);
         const sttBackend = config.sttProvider === "openai"
           ? "OpenAI"
-          : config.sttProvider === "whisper.cpp"
-            ? "whisper.cpp"
-            : "local Whisper";
+          : config.sttProvider === "groq"
+            ? "Groq"
+            : config.sttProvider === "whisper.cpp"
+              ? "whisper.cpp"
+              : "local Whisper";
         const ttsBackend = config.ttsProvider === "openai"
           ? "OpenAI"
           : config.ttsProvider === "kokoro"
