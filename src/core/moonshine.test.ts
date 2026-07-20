@@ -1,12 +1,14 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveMoonshineSidecarPath } from "./config.js";
 import { MoonshineClient } from "./moonshine.js";
 
 const directories: string[] = [];
 
-const fakeSidecar = (): string => {
+const fakeSidecar = (readyDelayMs = 0): string => {
   const directory = mkdtempSync(join(tmpdir(), "converse-moonshine-test-"));
   directories.push(directory);
   const script = join(directory, "fake-sidecar.mjs");
@@ -18,7 +20,7 @@ if (language !== "en" || model !== "small-streaming") {
   console.log(JSON.stringify({ type: "fatal", error: "bad startup arguments" }));
   process.exit(1);
 }
-console.log(JSON.stringify({ type: "ready" }));
+setTimeout(() => console.log(JSON.stringify({ type: "ready" })), ${readyDelayMs});
 const input = readline.createInterface({ input: process.stdin });
 input.on("line", (line) => {
   const request = JSON.parse(line);
@@ -38,8 +40,8 @@ input.on("line", (line) => {
   return script;
 };
 
-const client = (sidecarPath: string, timeoutMs = 500, diagnostics: Error[] = []) => new MoonshineClient({
-  pythonCommand: process.execPath,
+const client = (sidecarPath: string, timeoutMs = 500, diagnostics: Error[] = [], pythonCommand = process.execPath) => new MoonshineClient({
+  pythonCommand,
   sidecarPath,
   language: "en",
   model: "small-streaming",
@@ -94,6 +96,47 @@ describe("MoonshineClient", () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(diagnostics.some((error) => /timed out|exited unexpectedly/.test(error.message))).toBe(true);
     await moonshine.stop();
+  });
+
+  it("resolves and starts the sidecar from Pi's copied dist layout", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "converse-pi-runtime-test-"));
+    directories.push(directory);
+    const dist = join(directory, "package", "dist");
+    mkdirSync(join(dist, "core"), { recursive: true });
+    mkdirSync(join(dist, "services"), { recursive: true });
+    writeFileSync(join(dist, "services", "moonshine-sidecar.py"), `
+import json
+import os
+import sys
+print(json.dumps({"type": "ready"}), flush=True)
+for line in sys.stdin:
+    request = json.loads(line)
+    print(json.dumps({"type": "result", "id": request["id"], "text": "6:16000:1:" + str(os.getpid())}), flush=True)
+`);
+    const runtime = join(directory, "runtime");
+    cpSync(dist, runtime, { recursive: true });
+
+    const moduleUrl = pathToFileURL(join(runtime, "core", "config.js")).href;
+    const sidecarPath = resolveMoonshineSidecarPath(moduleUrl);
+    expect(sidecarPath).toBe(join(runtime, "services", "moonshine-sidecar.py"));
+
+    const moonshine = client(sidecarPath, 500, [], "python3");
+    try {
+      await expect(moonshine.transcribe(Buffer.from([6, 0]), 16_000, 1))
+        .resolves.toMatch(/^6:16000:1:\d+$/);
+    } finally {
+      await moonshine.stop();
+    }
+  });
+
+  it("settles startup promptly when stopped before the sidecar is ready", async () => {
+    const moonshine = client(fakeSidecar(10_000), 20_000);
+    const startup = moonshine.start();
+    const rejected = expect(startup).rejects.toThrow("Moonshine sidecar stopped");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    await moonshine.stop();
+    await rejected;
   });
 
   it("can restart cleanly after an explicit stop", async () => {

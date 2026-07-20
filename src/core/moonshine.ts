@@ -127,7 +127,10 @@ export class MoonshineClient {
     if (!child) return;
     this.stoppingChildren.add(child);
     this.child = undefined;
-    this.rejectEverything(new Error("Moonshine sidecar stopped"));
+    child.stdout.removeAllListeners("data");
+    const stopped = new Error("Moonshine sidecar stopped");
+    this.rejectStartup(stopped);
+    this.rejectEverything(stopped);
     if (child.exitCode !== null) {
       this.resetStartState();
       return;
@@ -218,12 +221,17 @@ export class MoonshineClient {
   }
 
   private fail(error: Error): void {
+    const rejectedStartup = this.rejectStartup(error);
+    this.rejectEverything(error);
+    if (!rejectedStartup) this.onDiagnostic(error);
+  }
+
+  private rejectStartup(error: Error): boolean {
     const rejectStart = this.rejectStart;
     this.resolveStart = undefined;
     this.rejectStart = undefined;
     rejectStart?.(error);
-    this.rejectEverything(error);
-    if (!rejectStart) this.onDiagnostic(error);
+    return rejectStart !== undefined;
   }
 
   private rejectEverything(error: Error): void {

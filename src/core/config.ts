@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -248,8 +248,14 @@ const isPocketTtsUrl = (value: string): boolean => {
   }
 };
 
-const defaultMoonshineSidecarPath = (): string =>
-  fileURLToPath(new URL("../../services/moonshine-sidecar.py", import.meta.url));
+export const resolveMoonshineSidecarPath = (moduleUrl = import.meta.url): string => {
+  const candidates = [
+    new URL("../services/moonshine-sidecar.py", moduleUrl),
+    new URL("../../services/moonshine-sidecar.py", moduleUrl),
+  ];
+  const match = candidates.find((candidate) => existsSync(candidate));
+  return fileURLToPath(match ?? candidates[0]!);
+};
 
 export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
   const file = readFileConfig(path);
@@ -384,7 +390,7 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
     whisperLanguage: file.whisperLanguage ?? process.env.WHISPER_LANGUAGE ?? "en",
     whisperPrompt: file.whisperPrompt ?? process.env.WHISPER_INITIAL_PROMPT ?? "",
     moonshinePythonCommand: file.moonshinePythonCommand ?? "python3",
-    moonshineSidecarPath: file.moonshineSidecarPath ?? defaultMoonshineSidecarPath(),
+    moonshineSidecarPath: file.moonshineSidecarPath ?? resolveMoonshineSidecarPath(),
     moonshineLanguage: file.moonshineLanguage ?? "en",
     moonshineModel: file.moonshineModel ?? "small-streaming",
     kokoroUrl,
