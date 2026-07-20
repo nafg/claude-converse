@@ -80,7 +80,7 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
 
     try {
       const chunks = splitSpeechChunks(source);
-      if (this.config.voiceProvider === "openai") {
+      if (this.config.ttsProvider === "openai") {
         return await this.speakHostedChunks(chunks, generation, abortController.signal);
       }
 
@@ -193,7 +193,7 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
     form.set("file", new Blob([new Uint8Array(wav)], { type: "audio/wav" }), "audio.wav");
     const response = await fetch(this.config.whisperUrl, {
       method: "POST",
-      headers: this.apiHeaders(),
+      headers: this.apiHeaders("transcription"),
       body: form,
       signal: AbortSignal.timeout(this.config.apiTimeoutMs),
     });
@@ -206,29 +206,31 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
     const timeoutSignal = AbortSignal.timeout(this.config.apiTimeoutMs);
     const response = await fetch(this.config.kokoroUrl, {
       method: "POST",
-      headers: this.apiHeaders("application/json"),
+      headers: this.apiHeaders("speech", "application/json"),
       signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
       body: JSON.stringify({
         model: this.config.kokoroModel,
         input: text,
         voice: this.config.kokoroVoice,
         response_format: "wav",
-        ...(this.config.voiceProvider === "openai" ? { speed: this.config.ttsSpeed } : {}),
+        ...(this.config.ttsProvider === "openai" ? { speed: this.config.ttsSpeed } : {}),
       }),
     });
     if (!response.ok) throw await this.requestError("speech", response);
     return Buffer.from(await response.arrayBuffer());
   }
 
-  private apiHeaders(contentType?: string): Headers {
+  private apiHeaders(operation: "transcription" | "speech", contentType?: string): Headers {
     const headers = new Headers();
     if (contentType) headers.set("content-type", contentType);
-    if (this.config.apiKey) headers.set("authorization", `Bearer ${this.config.apiKey}`);
+    const apiKey = operation === "transcription" ? this.config.sttApiKey : this.config.ttsApiKey;
+    if (apiKey) headers.set("authorization", `Bearer ${apiKey}`);
     return headers;
   }
 
   private async requestError(operation: "transcription" | "speech", response: Response): Promise<Error> {
-    const backend = this.config.voiceProvider === "openai" ? "OpenAI" : operation === "transcription" ? "Whisper" : "Kokoro";
+    const provider = operation === "transcription" ? this.config.sttProvider : this.config.ttsProvider;
+    const backend = provider === "openai" ? "OpenAI" : operation === "transcription" ? "Whisper" : "Kokoro";
     const detail = (await response.text()).trim().replace(/\s+/g, " ").slice(0, 500);
     return new Error(`${backend} ${operation} request failed: ${response.status}${detail ? `: ${detail}` : ""}`);
   }

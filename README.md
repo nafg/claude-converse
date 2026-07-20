@@ -7,7 +7,7 @@ This branch rebuilds Converse around a shared **TypeScript voice core**:
 - **Claude adapter**: runs a localhost HTTP daemon
 - **Pi adapter**: runs the same service in-process inside the extension
 - **Linux audio tools**: microphone capture via `parecord`, playback via `paplay` by default
-- **STT/TTS backends**: local Whisper/Kokoro HTTP or OpenAI's hosted Audio API (selected automatically when `OPENAI_API_KEY` is available)
+- **Independent STT/TTS backends**: mix local Whisper/Kokoro HTTP with OpenAI's hosted Audio API
 
 ## Current architecture
 
@@ -39,8 +39,8 @@ You need:
 
 - Node.js
 - `parecord` / `paplay` (usually from PulseAudio/PipeWire Pulse tools)
-- **recommended:** an `OPENAI_API_KEY`, which uses OpenAI's hosted transcription and TTS APIs and keeps Whisper/Kokoro off this computer
-- **or:** a Whisper-compatible server and a Kokoro-compatible TTS server
+- **hosted:** an OpenAI API key stored in the user config
+- **local:** a Whisper-compatible server, a Kokoro-compatible TTS server, or one of each alongside OpenAI
 
 ## Configuration
 
@@ -57,22 +57,36 @@ mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/claude-converse"
 cp config.example.json "${XDG_CONFIG_HOME:-$HOME/.config}/claude-converse/config.json"
 ```
 
-Every setting is optional. Missing files and omitted settings use the defaults below. Explicit file settings take precedence over legacy environment variables, so the file alone is sufficient. Unknown keys, incorrect types, and malformed JSON fail at startup instead of being silently ignored. Because `apiKey` is a secret, keep a config containing one readable only by your user (for example, `chmod 600 config.json`).
+Every setting is optional. Missing files and omitted settings use the defaults below. Explicit file settings take precedence over legacy environment variables, so the file alone is sufficient. Unknown keys, incorrect types, and malformed JSON fail at startup instead of being silently ignored. Because `sttApiKey` and `ttsApiKey` are secrets, keep a config containing them readable only by your user (for example, `chmod 600 config.json`).
 
 Changes are loaded when the process starts: use `/converse off` followed by `/converse on` for Claude, or `/reload` for Pi. The daemon and its helper hooks all resolve the same XDG path.
 
-### Hosted audio (recommended)
+### Independent audio providers
 
-OpenAI is the recommended hosted backend because its Audio API supplies both services this project needs, accepts the existing OpenAI-compatible transcription payload, and returns WAV directly for the existing player. Configure it without environment variables by setting `"voiceProvider": "openai"` and `"apiKey": "..."` in the file. It defaults to `gpt-4o-transcribe` for STT and `gpt-4o-mini-tts` with the `alloy` voice for TTS.
+STT and TTS are selected separately. OpenAI uses `gpt-4o-transcribe` for STT and `gpt-4o-mini-tts` with the `alloy` voice for TTS by default. For hosted transcription with local speech, configure:
 
-Set `"voiceProvider": "local"` to keep audio processing local. Environment variables remain supported as fallbacks for existing installations; when neither the file nor `CONVERSE_VOICE_PROVIDER` selects a provider, a legacy `OPENAI_API_KEY` selects OpenAI automatically.
+```json
+{
+  "sttProvider": "openai",
+  "sttApiKey": "...",
+  "ttsProvider": "local"
+}
+```
+
+Reverse the two providers and set `ttsApiKey` for local transcription with OpenAI speech. Setting both providers to `local` keeps all audio processing on this computer; setting both to `openai` keeps it off this computer. Each OpenAI key is attached only to its own request, and OpenAI providers reject endpoints other than HTTPS URLs on `api.openai.com`.
+
+The former `voiceProvider` and shared `apiKey` file settings remain accepted for existing installations. Likewise, when no file setting chooses either provider, `CONVERSE_VOICE_PROVIDER` and `OPENAI_API_KEY` retain their coupled legacy behavior.
 
 Legacy environment variables and their corresponding file settings:
 
 - `CONVERSE_HOST` → `host` — default `127.0.0.1`
 - `CONVERSE_PORT` → `port` — default `45839`
-- `CONVERSE_VOICE_PROVIDER` → `voiceProvider` — `openai` or `local`; defaults to `openai` when the legacy `OPENAI_API_KEY` is set, otherwise `local`
-- `OPENAI_API_KEY` → `apiKey` — enables the hosted OpenAI STT/TTS backend
+- `CONVERSE_STT_PROVIDER` → `sttProvider` — independently selects `openai` or `local` transcription
+- `CONVERSE_TTS_PROVIDER` → `ttsProvider` — independently selects `openai` or `local` speech
+- `OPENAI_STT_API_KEY` → `sttApiKey` — used only for OpenAI transcription
+- `OPENAI_TTS_API_KEY` → `ttsApiKey` — used only for OpenAI speech
+- `CONVERSE_VOICE_PROVIDER` → legacy `voiceProvider` — coupled fallback for both providers
+- `OPENAI_API_KEY` → legacy `apiKey` — shared fallback key for existing installations
 - `CONVERSE_API_TIMEOUT_MS` → `apiTimeoutMs` — maximum time for each transcription or speech request; default `60000`
 - `WHISPER_URL` → `whisperUrl` — transcription URL; defaults to OpenAI or `http://localhost:2022/v1/audio/transcriptions` for local. OpenAI mode accepts only `https://api.openai.com` URLs, so its key cannot be sent to an arbitrary override.
 - `WHISPER_MODEL` → `whisperModel` — defaults to `gpt-4o-transcribe` on OpenAI or `base` locally

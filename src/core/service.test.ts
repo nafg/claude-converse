@@ -7,26 +7,36 @@ type ServiceInternals = {
   synthesize(text: string): Promise<Buffer>;
 };
 
+const openAiConfig = () => ({
+  ...loadConfig(),
+  sttProvider: "openai" as const,
+  ttsProvider: "openai" as const,
+  voiceProvider: "openai" as const,
+  sttApiKey: "stt-key",
+  ttsApiKey: "tts-key",
+  apiKey: undefined,
+});
+
 const serviceWithKey = (): ServiceInternals => {
-  const service = new ConverseService({ ...loadConfig(), apiKey: "test-key" }, "test-owner");
+  const service = new ConverseService(openAiConfig(), "test-owner");
   return service as unknown as ServiceInternals;
 };
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("ConverseService API authentication", () => {
-  it("sends the API key with multipart transcription requests", async () => {
+  it("sends only the STT API key with multipart transcription requests", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ text: "hello" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
     await serviceWithKey().transcribe(Buffer.alloc(960));
 
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
-    expect(new Headers(request.headers).get("authorization")).toBe("Bearer test-key");
+    expect(new Headers(request.headers).get("authorization")).toBe("Bearer stt-key");
     expect(request.body).toBeInstanceOf(FormData);
   });
 
-  it("sends the API key with JSON speech requests", async () => {
+  it("sends only the TTS API key with JSON speech requests", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(Buffer.from("wav"), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -34,7 +44,7 @@ describe("ConverseService API authentication", () => {
 
     const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
     const headers = new Headers(request.headers);
-    expect(headers.get("authorization")).toBe("Bearer test-key");
+    expect(headers.get("authorization")).toBe("Bearer tts-key");
     expect(headers.get("content-type")).toBe("application/json");
     expect(JSON.parse(request.body as string)).toMatchObject({ speed: 1.25 });
   });
@@ -50,7 +60,7 @@ describe("ConverseService API authentication", () => {
   it("does not synthesize text removed entirely by speech cleanup", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    const service = new ConverseService({ ...loadConfig(), voiceProvider: "openai", apiKey: "test-key" }, "test-owner");
+    const service = new ConverseService(openAiConfig(), "test-owner");
 
     await expect(service.speak("---", "test-owner")).resolves.toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
@@ -63,7 +73,7 @@ describe("ConverseService API authentication", () => {
       return new Promise<Response>(() => undefined);
     });
     vi.stubGlobal("fetch", fetchMock);
-    const service = new ConverseService({ ...loadConfig(), voiceProvider: "openai", apiKey: "test-key" }, "test-owner");
+    const service = new ConverseService(openAiConfig(), "test-owner");
 
     void service.speak("Still synthesizing.", "test-owner");
     await vi.waitFor(() => expect(requestSignal).toBeDefined());
@@ -75,7 +85,7 @@ describe("ConverseService API authentication", () => {
   it("prefetches the next hosted sentence before playing the current one", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(Buffer.from("wav"), { status: 200 })));
     vi.stubGlobal("fetch", fetchMock);
-    const service = new ConverseService({ ...loadConfig(), voiceProvider: "openai", apiKey: "test-key" }, "test-owner");
+    const service = new ConverseService(openAiConfig(), "test-owner");
     let requestsAtFirstPlayback = 0;
     (service as unknown as { playWav: () => Promise<void> }).playWav = async () => {
       if (requestsAtFirstPlayback === 0) requestsAtFirstPlayback = fetchMock.mock.calls.length;

@@ -12,11 +12,15 @@ const configEnv = [
   "VAD_BARGE_IN_ENERGY_MULT",
   "CONVERSE_BYTES_PER_SAMPLE",
   "CONVERSE_VOICE_PROVIDER",
+  "CONVERSE_STT_PROVIDER",
+  "CONVERSE_TTS_PROVIDER",
   "CONVERSE_API_TIMEOUT_MS",
   "CONVERSE_TTS_SPEED",
   "CONVERSE_TTS_VOICE",
   "CONVERSE_VOICE_WAIT_MS",
   "OPENAI_API_KEY",
+  "OPENAI_STT_API_KEY",
+  "OPENAI_TTS_API_KEY",
   "WHISPER_URL",
   "WHISPER_MODEL",
   "KOKORO_URL",
@@ -59,7 +63,11 @@ describe("loadConfig", () => {
     const config = loadEnvConfig();
 
     expect(config).toMatchObject({
+      sttProvider: "openai",
+      ttsProvider: "openai",
       voiceProvider: "openai",
+      sttApiKey: "test-key",
+      ttsApiKey: "test-key",
       apiKey: "test-key",
       apiTimeoutMs: 60_000,
       ttsSpeed: 1.25,
@@ -87,7 +95,11 @@ describe("loadConfig", () => {
     const config = loadEnvConfig();
 
     expect(config).toMatchObject({
+      sttProvider: "local",
+      ttsProvider: "local",
       voiceProvider: "local",
+      sttApiKey: undefined,
+      ttsApiKey: undefined,
       apiKey: undefined,
       whisperUrl: "http://localhost:2022/v1/audio/transcriptions",
       whisperModel: "base",
@@ -99,7 +111,7 @@ describe("loadConfig", () => {
 
   it("requires a key when OpenAI is explicitly selected", () => {
     process.env.CONVERSE_VOICE_PROVIDER = "openai";
-    expect(() => loadEnvConfig()).toThrow(/apiKey/);
+    expect(() => loadEnvConfig()).toThrow(/sttApiKey/);
   });
 
   it("does not send the OpenAI key to a URL override", () => {
@@ -134,6 +146,8 @@ describe("loadConfig", () => {
     }));
 
     expect(loadConfig(path)).toMatchObject({
+      sttProvider: "local",
+      ttsProvider: "local",
       voiceProvider: "local",
       apiKey: undefined,
       port: 2345,
@@ -151,12 +165,82 @@ describe("loadConfig", () => {
     writeFileSync(path, JSON.stringify({ voiceProvider: "openai", apiKey: "file-key", ttsSpeed: 1.5 }));
 
     expect(loadConfig(path)).toMatchObject({
+      sttProvider: "openai",
+      ttsProvider: "openai",
       voiceProvider: "openai",
+      sttApiKey: "file-key",
+      ttsApiKey: "file-key",
       apiKey: "file-key",
       whisperModel: "gpt-4o-transcribe",
       kokoroModel: "gpt-4o-mini-tts",
       ttsSpeed: 1.5,
     });
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("selects OpenAI independently for STT and TTS from the file", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
+    const path = join(directory, "config.json");
+    writeFileSync(path, JSON.stringify({
+      sttProvider: "openai",
+      ttsProvider: "local",
+      sttApiKey: "stt-key",
+    }));
+
+    expect(loadConfig(path)).toMatchObject({
+      sttProvider: "openai",
+      ttsProvider: "local",
+      voiceProvider: "mixed",
+      sttApiKey: "stt-key",
+      ttsApiKey: undefined,
+      apiKey: undefined,
+      whisperUrl: "https://api.openai.com/v1/audio/transcriptions",
+      whisperModel: "gpt-4o-transcribe",
+      kokoroUrl: "http://localhost:8880/v1/audio/speech",
+      kokoroModel: "kokoro",
+      kokoroVoice: "af_heart",
+    });
+
+    writeFileSync(path, JSON.stringify({
+      sttProvider: "local",
+      ttsProvider: "openai",
+      ttsApiKey: "tts-key",
+      ttsSpeed: 1.5,
+    }));
+    expect(loadConfig(path)).toMatchObject({
+      sttProvider: "local",
+      ttsProvider: "openai",
+      voiceProvider: "mixed",
+      sttApiKey: undefined,
+      ttsApiKey: "tts-key",
+      whisperUrl: "http://localhost:2022/v1/audio/transcriptions",
+      whisperModel: "base",
+      kokoroUrl: "https://api.openai.com/v1/audio/speech",
+      kokoroModel: "gpt-4o-mini-tts",
+      kokoroVoice: "alloy",
+      ttsSpeed: 1.5,
+    });
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("validates only the OpenAI side's endpoint", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
+    const path = join(directory, "config.json");
+    writeFileSync(path, JSON.stringify({
+      sttProvider: "openai",
+      ttsProvider: "local",
+      sttApiKey: "stt-key",
+      whisperUrl: "https://example.com/v1/audio/transcriptions",
+    }));
+    expect(() => loadConfig(path)).toThrow(/whisperUrl.*api\.openai\.com/);
+
+    writeFileSync(path, JSON.stringify({
+      sttProvider: "local",
+      ttsProvider: "openai",
+      ttsApiKey: "tts-key",
+      kokoroUrl: "http://localhost:8880/v1/audio/speech",
+    }));
+    expect(() => loadConfig(path)).toThrow(/kokoroUrl.*api\.openai\.com/);
     rmSync(directory, { recursive: true, force: true });
   });
 

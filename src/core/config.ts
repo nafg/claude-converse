@@ -19,7 +19,13 @@ export interface ConverseConfig {
   statusWindowSeconds: number;
   statusPrefix: string;
   statusSeparator: string;
-  voiceProvider: "local" | "openai";
+  sttProvider: "local" | "openai";
+  ttsProvider: "local" | "openai";
+  sttApiKey?: string;
+  ttsApiKey?: string;
+  /** Compatibility summary for callers that used the formerly coupled provider. */
+  voiceProvider: "local" | "openai" | "mixed";
+  /** Compatibility key populated only when both sides use the same OpenAI key. */
   apiKey?: string;
   apiTimeoutMs: number;
   whisperUrl: string;
@@ -40,7 +46,11 @@ export interface ConverseConfig {
   port: number;
 }
 
-type FileConfig = Partial<ConverseConfig>;
+type AudioProvider = "local" | "openai";
+type FileConfig = Partial<Omit<ConverseConfig, "voiceProvider" | "apiKey">> & {
+  voiceProvider?: AudioProvider;
+  apiKey?: string;
+};
 type ValueKind = "number" | "string" | "string[]" | "provider";
 
 const fileConfigKinds: Record<keyof ConverseConfig, ValueKind> = {
@@ -60,6 +70,10 @@ const fileConfigKinds: Record<keyof ConverseConfig, ValueKind> = {
   statusWindowSeconds: "number",
   statusPrefix: "string",
   statusSeparator: "string",
+  sttProvider: "provider",
+  ttsProvider: "provider",
+  sttApiKey: "string",
+  ttsApiKey: "string",
   voiceProvider: "provider",
   apiKey: "string",
   apiTimeoutMs: "number",
@@ -136,12 +150,15 @@ const stringListEnv = (name: string): string[] => {
   return value ? value.split(/\s+/g) : [];
 };
 
-const envVoiceProvider = (): "local" | "openai" => {
-  const configured = process.env.CONVERSE_VOICE_PROVIDER?.trim().toLowerCase();
-  if (!configured) return process.env.OPENAI_API_KEY?.trim() ? "openai" : "local";
+const providerEnv = (name: string): AudioProvider | undefined => {
+  const configured = process.env[name]?.trim().toLowerCase();
+  if (!configured) return undefined;
   if (configured === "local" || configured === "openai") return configured;
-  throw new Error(`CONVERSE_VOICE_PROVIDER=${configured} is unsupported; use local or openai`);
+  throw new Error(`${name}=${configured} is unsupported; use local or openai`);
 };
+
+const legacyVoiceProvider = (): AudioProvider =>
+  providerEnv("CONVERSE_VOICE_PROVIDER") ?? (process.env.OPENAI_API_KEY?.trim() ? "openai" : "local");
 
 const isOpenAiUrl = (value: string): boolean => {
   try {
@@ -154,23 +171,38 @@ const isOpenAiUrl = (value: string): boolean => {
 
 export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
   const file = readFileConfig(path);
-  const provider = file.voiceProvider ?? envVoiceProvider();
-  const apiKey = provider === "openai" ? (file.apiKey ?? process.env.OPENAI_API_KEY?.trim()) : undefined;
+  const environmentProvider = legacyVoiceProvider();
+  const sttProvider = file.sttProvider ?? file.voiceProvider ?? providerEnv("CONVERSE_STT_PROVIDER") ?? environmentProvider;
+  const ttsProvider = file.ttsProvider ?? file.voiceProvider ?? providerEnv("CONVERSE_TTS_PROVIDER") ?? environmentProvider;
+  const environmentApiKey = process.env.OPENAI_API_KEY?.trim();
+  const sttApiKey = sttProvider === "openai"
+    ? file.sttApiKey ?? file.apiKey ?? process.env.OPENAI_STT_API_KEY?.trim() ?? environmentApiKey
+    : undefined;
+  const ttsApiKey = ttsProvider === "openai"
+    ? file.ttsApiKey ?? file.apiKey ?? process.env.OPENAI_TTS_API_KEY?.trim() ?? environmentApiKey
+    : undefined;
   const bytesPerSample = file.bytesPerSample ?? intEnv("CONVERSE_BYTES_PER_SAMPLE", 2);
   const apiTimeoutMs = file.apiTimeoutMs ?? intEnv("CONVERSE_API_TIMEOUT_MS", 60_000);
   const ttsSpeed = file.ttsSpeed ?? floatEnv("CONVERSE_TTS_SPEED", 1.25);
   const voiceWaitMs = file.voiceWaitMs ?? intEnv("CONVERSE_VOICE_WAIT_MS", 5_000);
-  const whisperUrl = file.whisperUrl ?? process.env.WHISPER_URL ?? (provider === "openai" ? "https://api.openai.com/v1/audio/transcriptions" : "http://localhost:2022/v1/audio/transcriptions");
-  const kokoroUrl = file.kokoroUrl ?? process.env.KOKORO_URL ?? (provider === "openai" ? "https://api.openai.com/v1/audio/speech" : "http://localhost:8880/v1/audio/speech");
+  const whisperUrl = file.whisperUrl ?? process.env.WHISPER_URL ?? (sttProvider === "openai" ? "https://api.openai.com/v1/audio/transcriptions" : "http://localhost:2022/v1/audio/transcriptions");
+  const kokoroUrl = file.kokoroUrl ?? process.env.KOKORO_URL ?? (ttsProvider === "openai" ? "https://api.openai.com/v1/audio/speech" : "http://localhost:8880/v1/audio/speech");
 
   if (bytesPerSample !== 2) throw new Error(`bytesPerSample=${bytesPerSample} is unsupported; only 2-byte S16_LE audio is supported`);
-  if (provider === "openai" && !apiKey) throw new Error(`apiKey must be set in ${path} when voiceProvider is openai`);
+  if (sttProvider === "openai" && !sttApiKey) throw new Error(`sttApiKey must be set in ${path} when sttProvider is openai`);
+  if (ttsProvider === "openai" && !ttsApiKey) throw new Error(`ttsApiKey must be set in ${path} when ttsProvider is openai`);
   if (apiTimeoutMs <= 0) throw new Error("apiTimeoutMs must be a positive number");
   if (ttsSpeed < 0.25 || ttsSpeed > 4) throw new Error("ttsSpeed must be between 0.25 and 4");
   if (voiceWaitMs <= 0) throw new Error("voiceWaitMs must be a positive number");
-  if (provider === "openai" && (!isOpenAiUrl(whisperUrl) || !isOpenAiUrl(kokoroUrl))) {
-    throw new Error("whisperUrl and kokoroUrl must use https://api.openai.com when voiceProvider is openai");
+  if (sttProvider === "openai" && !isOpenAiUrl(whisperUrl)) {
+    throw new Error("whisperUrl must use https://api.openai.com when sttProvider is openai");
   }
+  if (ttsProvider === "openai" && !isOpenAiUrl(kokoroUrl)) {
+    throw new Error("kokoroUrl must use https://api.openai.com when ttsProvider is openai");
+  }
+
+  const voiceProvider = sttProvider === ttsProvider ? sttProvider : "mixed";
+  const apiKey = sttProvider === "openai" && ttsProvider === "openai" && sttApiKey === ttsApiKey ? sttApiKey : undefined;
 
   return {
     sampleRate: file.sampleRate ?? intEnv("CONVERSE_SAMPLE_RATE", 16_000),
@@ -189,16 +221,20 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
     statusWindowSeconds: file.statusWindowSeconds ?? intEnv("CONVERSE_STATUS_WINDOW", 30),
     statusPrefix: file.statusPrefix ?? process.env.CONVERSE_STATUS_PREFIX ?? "🎤 ",
     statusSeparator: file.statusSeparator ?? process.env.CONVERSE_STATUS_SEPARATOR ?? " | ",
-    voiceProvider: provider,
+    sttProvider,
+    ttsProvider,
+    sttApiKey,
+    ttsApiKey,
+    voiceProvider,
     apiKey,
     apiTimeoutMs,
     whisperUrl,
-    whisperModel: file.whisperModel ?? process.env.WHISPER_MODEL ?? (provider === "openai" ? "gpt-4o-transcribe" : "base"),
+    whisperModel: file.whisperModel ?? process.env.WHISPER_MODEL ?? (sttProvider === "openai" ? "gpt-4o-transcribe" : "base"),
     whisperLanguage: file.whisperLanguage ?? process.env.WHISPER_LANGUAGE ?? "en",
     whisperPrompt: file.whisperPrompt ?? process.env.WHISPER_INITIAL_PROMPT ?? "",
     kokoroUrl,
-    kokoroVoice: file.kokoroVoice ?? process.env.CONVERSE_TTS_VOICE ?? process.env.KOKORO_VOICE ?? (provider === "openai" ? "alloy" : "af_heart"),
-    kokoroModel: file.kokoroModel ?? process.env.KOKORO_MODEL ?? (provider === "openai" ? "gpt-4o-mini-tts" : "kokoro"),
+    kokoroVoice: file.kokoroVoice ?? process.env.CONVERSE_TTS_VOICE ?? process.env.KOKORO_VOICE ?? (ttsProvider === "openai" ? "alloy" : "af_heart"),
+    kokoroModel: file.kokoroModel ?? process.env.KOKORO_MODEL ?? (ttsProvider === "openai" ? "gpt-4o-mini-tts" : "kokoro"),
     ttsSpeed,
     voiceWaitMs,
     recorderCommand: file.recorderCommand ?? process.env.CONVERSE_RECORDER_COMMAND ?? "parecord",
