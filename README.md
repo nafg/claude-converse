@@ -106,7 +106,10 @@ Groq's [pricing page](https://groq.com/pricing) states that audio is billed with
   "whisperModel": "Systran/faster-distil-whisper-small.en",
   "whisperLanguage": "en",
   "whisperPrompt": "Programming and software-development vocabulary",
-  "ttsProvider": "kokoro"
+  "ttsProvider": "speaches-kokoro",
+  "kokoroUrl": "http://localhost:8000/v1/audio/speech",
+  "kokoroModel": "speaches-ai/Kokoro-82M-v1.0-ONNX",
+  "kokoroVoice": "af_heart"
 }
 ```
 
@@ -156,14 +159,45 @@ Select the existing OpenAI-compatible Kokoro server explicitly with:
 
 Kokoro requests are local and never receive an API key. Converse sends one WAV request per speech chunk, which keeps long responses understandable and preserves cancellation between sentences. Speaking over playback follows the same VAD barge-in path as every other TTS provider and aborts in-flight synthesis as well as the active player. `local` remains accepted as the legacy Kokoro-compatible TTS alias.
 
+#### Speaches Kokoro ONNX speech
+
+Speaches can serve Kokoro through ONNX Runtime on CPU, avoiding the separate PyTorch/CUDA Kokoro process while retaining the same natural voices. Select it independently from STT, or use the complete [`config.speaches-kokoro.example.json`](config.speaches-kokoro.example.json) to run both sides through one Speaches process:
+
+```json
+{
+  "sttProvider": "speaches",
+  "ttsProvider": "speaches-kokoro",
+  "kokoroUrl": "http://localhost:8000/v1/audio/speech",
+  "kokoroModel": "speaches-ai/Kokoro-82M-v1.0-ONNX",
+  "kokoroVoice": "af_heart",
+  "ttsSpeed": 1.25
+}
+```
+
+Use Speaches' CPU deployment and download the model before starting Converse:
+
+```bash
+docker run --rm --detach --publish 8000:8000 \
+  --name speaches \
+  --volume hf-hub-cache:/home/ubuntu/.cache/huggingface/hub \
+  ghcr.io/speaches-ai/speaches:latest-cpu
+
+SPEACHES_BASE_URL=http://localhost:8000 \
+  uvx speaches-cli model download speaches-ai/Kokoro-82M-v1.0-ONNX
+```
+
+Speaches unloads TTS models after 300 seconds by default. Its external `TTS_MODEL_TTL` setting controls that behavior: keep the default to recover memory while idle, or set `TTS_MODEL_TTL=-1` to avoid reload latency during an active voice-work session. Converse does not start or manage Speaches. It requests WAV chunks, includes the configured speed (Speaches accepts `0.5` through `2`), and retains the common sentence chunking, cancellation, playback, and VAD barge-in behavior for long replies.
+
+Authentication is optional. Configure `ttsApiKey` only when a protected Speaches server runs on loopback. Keyless `speaches-kokoro` may use a trusted LAN HTTP(S) endpoint with the exact `/v1/audio/speech` path; authenticated endpoints are restricted to loopback and URL-embedded credentials are rejected. The TTS key is never attached to STT.
+
 Legacy environment variables and their corresponding file settings:
 
 - `CONVERSE_HOST` → `host` — default `127.0.0.1`
 - `CONVERSE_PORT` → `port` — default `45839`
 - `CONVERSE_STT_PROVIDER` → `sttProvider` — independently selects `openai`, `groq`, `speaches`, `whisper.cpp`, or the compatibility alias `local` for transcription
-- `CONVERSE_TTS_PROVIDER` → `ttsProvider` — independently selects `openai`, `kokoro`, or the compatibility alias `local` for speech
+- `CONVERSE_TTS_PROVIDER` → `ttsProvider` — independently selects `openai`, `kokoro`, `speaches-kokoro`, or the compatibility alias `local` for speech
 - `OPENAI_STT_API_KEY` → `sttApiKey` — legacy environment fallback used only for OpenAI transcription; set `sttApiKey` in the file for Groq or optional loopback Speaches authentication
-- `OPENAI_TTS_API_KEY` → `ttsApiKey` — used only for OpenAI speech
+- `OPENAI_TTS_API_KEY` → `ttsApiKey` — legacy environment fallback used only for OpenAI speech; set `ttsApiKey` in the file for optional loopback Speaches Kokoro authentication
 - `CONVERSE_VOICE_PROVIDER` → legacy `voiceProvider` — coupled fallback for both providers
 - `OPENAI_API_KEY` → legacy `apiKey` — shared fallback key for existing installations
 - `CONVERSE_API_TIMEOUT_MS` → `apiTimeoutMs` — maximum time for each transcription or speech request; default `60000`
@@ -171,10 +205,10 @@ Legacy environment variables and their corresponding file settings:
 - `WHISPER_MODEL` → `whisperModel` — defaults to `gpt-4o-transcribe` on OpenAI, `whisper-large-v3-turbo` on Groq, `Systran/faster-distil-whisper-small.en` on Speaches, `base.en` for explicit `whisper.cpp`, or `base` for legacy `local`
 - `WHISPER_LANGUAGE` → `whisperLanguage` — default `en`
 - `WHISPER_INITIAL_PROMPT` → `whisperPrompt` — default empty
-- `KOKORO_URL` → `kokoroUrl` — speech URL; defaults to OpenAI or `http://localhost:8880/v1/audio/speech` for Kokoro-compatible providers
+- `KOKORO_URL` → `kokoroUrl` — speech URL; defaults to OpenAI, `http://localhost:8000/v1/audio/speech` for Speaches Kokoro ONNX, or `http://localhost:8880/v1/audio/speech` for other Kokoro-compatible providers
 - `CONVERSE_TTS_VOICE` → `kokoroVoice` — defaults to `alloy` on OpenAI or `af_heart` locally (`KOKORO_VOICE` remains a compatibility fallback)
-- `KOKORO_MODEL` → `kokoroModel` — defaults to `gpt-4o-mini-tts` on OpenAI or `kokoro` locally
-- `CONVERSE_TTS_SPEED` → `ttsSpeed` — OpenAI speech speed from `0.25` to `4`; defaults to `1.25` for a more conversational pace
+- `KOKORO_MODEL` → `kokoroModel` — defaults to `gpt-4o-mini-tts` on OpenAI, `speaches-ai/Kokoro-82M-v1.0-ONNX` on Speaches Kokoro ONNX, or `kokoro` locally
+- `CONVERSE_TTS_SPEED` → `ttsSpeed` — OpenAI speed range is `0.25` to `4`; Speaches Kokoro ONNX accepts `0.5` to `2`; default `1.25`
 - `CONVERSE_VOICE_WAIT_MS` → `voiceWaitMs` — maximum time the Pi model's `wait_for_voice` tool waits for continuation of an unfinished thought; default `5000`
 - `CONVERSE_RECORDER_COMMAND` → `recorderCommand` — default `parecord`
 - `CONVERSE_RECORDER_DEVICE` → `recorderDevice` — default `default` (used only by the `arecord` fallback)

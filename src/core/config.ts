@@ -47,7 +47,7 @@ export interface ConverseConfig {
 }
 
 export type SttProvider = "local" | "openai" | "groq" | "speaches" | "whisper.cpp";
-export type TtsProvider = "local" | "openai" | "kokoro";
+export type TtsProvider = "local" | "openai" | "kokoro" | "speaches-kokoro";
 type LegacyAudioProvider = "local" | "openai";
 type FileConfig = Partial<Omit<ConverseConfig, "voiceProvider" | "apiKey">> & {
   voiceProvider?: LegacyAudioProvider;
@@ -128,7 +128,7 @@ const readFileConfig = (path: string): FileConfig => {
       : kind === "stt-provider"
         ? item === "local" || item === "openai" || item === "groq" || item === "speaches" || item === "whisper.cpp"
         : kind === "tts-provider"
-          ? item === "local" || item === "openai" || item === "kokoro"
+          ? item === "local" || item === "openai" || item === "kokoro" || item === "speaches-kokoro"
           : kind === "legacy-provider"
             ? item === "local" || item === "openai"
             : typeof item === kind && (kind !== "number" || Number.isFinite(item));
@@ -173,8 +173,8 @@ const sttProviderEnv = (): SttProvider | undefined => {
 const ttsProviderEnv = (): TtsProvider | undefined => {
   const configured = process.env.CONVERSE_TTS_PROVIDER?.trim().toLowerCase();
   if (!configured) return undefined;
-  if (configured === "local" || configured === "openai" || configured === "kokoro") return configured;
-  throw new Error(`CONVERSE_TTS_PROVIDER=${configured} is unsupported; use local, kokoro, or openai`);
+  if (configured === "local" || configured === "openai" || configured === "kokoro" || configured === "speaches-kokoro") return configured;
+  throw new Error(`CONVERSE_TTS_PROVIDER=${configured} is unsupported; use local, kokoro, speaches-kokoro, or openai`);
 };
 
 const legacyVoiceProvider = (): LegacyAudioProvider =>
@@ -202,11 +202,11 @@ const isGroqTranscriptionUrl = (value: string): boolean => {
   }
 };
 
-const speachesTranscriptionUrl = (value: string): URL | undefined => {
+const speachesAudioUrl = (value: string, pathname: "/v1/audio/transcriptions" | "/v1/audio/speech"): URL | undefined => {
   try {
     const url = new URL(value);
     if ((url.protocol !== "http:" && url.protocol !== "https:")
-      || url.pathname !== "/v1/audio/transcriptions"
+      || url.pathname !== pathname
       || url.username
       || url.password) return undefined;
     return url;
@@ -231,7 +231,9 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
       : undefined;
   const ttsApiKey = ttsProvider === "openai"
     ? file.ttsApiKey ?? file.apiKey ?? process.env.OPENAI_TTS_API_KEY?.trim() ?? environmentApiKey
-    : undefined;
+    : ttsProvider === "speaches-kokoro"
+      ? file.ttsApiKey
+      : undefined;
   const bytesPerSample = file.bytesPerSample ?? intEnv("CONVERSE_BYTES_PER_SAMPLE", 2);
   const apiTimeoutMs = file.apiTimeoutMs ?? intEnv("CONVERSE_API_TIMEOUT_MS", 60_000);
   const ttsSpeed = file.ttsSpeed ?? floatEnv("CONVERSE_TTS_SPEED", 1.25);
@@ -243,7 +245,11 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
       : sttProvider === "speaches"
         ? "http://localhost:8000/v1/audio/transcriptions"
         : "http://localhost:2022/v1/audio/transcriptions");
-  const kokoroUrl = file.kokoroUrl ?? process.env.KOKORO_URL ?? (ttsProvider === "openai" ? "https://api.openai.com/v1/audio/speech" : "http://localhost:8880/v1/audio/speech");
+  const kokoroUrl = file.kokoroUrl ?? process.env.KOKORO_URL ?? (ttsProvider === "openai"
+    ? "https://api.openai.com/v1/audio/speech"
+    : ttsProvider === "speaches-kokoro"
+      ? "http://localhost:8000/v1/audio/speech"
+      : "http://localhost:8880/v1/audio/speech");
 
   if (bytesPerSample !== 2) throw new Error(`bytesPerSample=${bytesPerSample} is unsupported; only 2-byte S16_LE audio is supported`);
   if ((sttProvider === "openai" || sttProvider === "groq") && !sttApiKey) {
@@ -252,6 +258,9 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
   if (ttsProvider === "openai" && !ttsApiKey) throw new Error(`ttsApiKey must be set in ${path} when ttsProvider is openai`);
   if (apiTimeoutMs <= 0) throw new Error("apiTimeoutMs must be a positive number");
   if (ttsSpeed < 0.25 || ttsSpeed > 4) throw new Error("ttsSpeed must be between 0.25 and 4");
+  if (ttsProvider === "speaches-kokoro" && (ttsSpeed < 0.5 || ttsSpeed > 2)) {
+    throw new Error("ttsSpeed must be between 0.5 and 2 when ttsProvider is speaches-kokoro");
+  }
   if (voiceWaitMs <= 0) throw new Error("voiceWaitMs must be a positive number");
   if (sttProvider === "openai" && !isOpenAiUrl(whisperUrl)) {
     throw new Error("whisperUrl must use https://api.openai.com when sttProvider is openai");
@@ -260,7 +269,7 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
     throw new Error("whisperUrl must use https://api.groq.com/openai/v1/audio/transcriptions when sttProvider is groq");
   }
   if (sttProvider === "speaches") {
-    const url = speachesTranscriptionUrl(whisperUrl);
+    const url = speachesAudioUrl(whisperUrl, "/v1/audio/transcriptions");
     if (!url) throw new Error("whisperUrl must be an HTTP(S) /v1/audio/transcriptions URL without embedded credentials when sttProvider is speaches");
     if (sttApiKey && !isLoopbackHost(url.hostname)) {
       throw new Error("sttApiKey may be used with Speaches only on a loopback whisperUrl");
@@ -268,6 +277,13 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
   }
   if (ttsProvider === "openai" && !isOpenAiUrl(kokoroUrl)) {
     throw new Error("kokoroUrl must use https://api.openai.com when ttsProvider is openai");
+  }
+  if (ttsProvider === "speaches-kokoro") {
+    const url = speachesAudioUrl(kokoroUrl, "/v1/audio/speech");
+    if (!url) throw new Error("kokoroUrl must be an HTTP(S) /v1/audio/speech URL without embedded credentials when ttsProvider is speaches-kokoro");
+    if (ttsApiKey && !isLoopbackHost(url.hostname)) {
+      throw new Error("ttsApiKey may be used with Speaches Kokoro only on a loopback kokoroUrl");
+    }
   }
 
   const voiceProvider = sttProvider === "openai" && ttsProvider === "openai"
@@ -315,7 +331,11 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
     whisperPrompt: file.whisperPrompt ?? process.env.WHISPER_INITIAL_PROMPT ?? "",
     kokoroUrl,
     kokoroVoice: file.kokoroVoice ?? process.env.CONVERSE_TTS_VOICE ?? process.env.KOKORO_VOICE ?? (ttsProvider === "openai" ? "alloy" : "af_heart"),
-    kokoroModel: file.kokoroModel ?? process.env.KOKORO_MODEL ?? (ttsProvider === "openai" ? "gpt-4o-mini-tts" : "kokoro"),
+    kokoroModel: file.kokoroModel ?? process.env.KOKORO_MODEL ?? (ttsProvider === "openai"
+      ? "gpt-4o-mini-tts"
+      : ttsProvider === "speaches-kokoro"
+        ? "speaches-ai/Kokoro-82M-v1.0-ONNX"
+        : "kokoro"),
     ttsSpeed,
     voiceWaitMs,
     recorderCommand: file.recorderCommand ?? process.env.CONVERSE_RECORDER_COMMAND ?? "parecord",

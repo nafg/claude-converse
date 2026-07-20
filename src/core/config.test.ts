@@ -376,6 +376,76 @@ describe("loadConfig", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  it("selects Speaches Kokoro ONNX independently with documented defaults and optional loopback authentication", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
+    const path = join(directory, "config.json");
+
+    writeFileSync(path, JSON.stringify({ sttProvider: "whisper.cpp", ttsProvider: "speaches-kokoro" }));
+    expect(loadConfig(path)).toMatchObject({
+      sttProvider: "whisper.cpp",
+      ttsProvider: "speaches-kokoro",
+      voiceProvider: "local",
+      ttsApiKey: undefined,
+      kokoroUrl: "http://localhost:8000/v1/audio/speech",
+      kokoroModel: "speaches-ai/Kokoro-82M-v1.0-ONNX",
+      kokoroVoice: "af_heart",
+      ttsSpeed: 1.25,
+    });
+
+    writeFileSync(path, JSON.stringify({
+      sttProvider: "whisper.cpp",
+      ttsProvider: "speaches-kokoro",
+      ttsApiKey: "local-secret",
+      kokoroUrl: "https://127.0.0.1:8443/v1/audio/speech",
+      kokoroModel: "example/custom-kokoro-onnx",
+      kokoroVoice: "af_sky",
+      ttsSpeed: 1.5,
+    }));
+    expect(loadConfig(path)).toMatchObject({
+      ttsProvider: "speaches-kokoro",
+      ttsApiKey: "local-secret",
+      kokoroUrl: "https://127.0.0.1:8443/v1/audio/speech",
+      kokoroModel: "example/custom-kokoro-onnx",
+      kokoroVoice: "af_sky",
+      ttsSpeed: 1.5,
+    });
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("allows keyless custom Speaches speech endpoints but protects configured credentials", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
+    const path = join(directory, "config.json");
+
+    writeFileSync(path, JSON.stringify({
+      sttProvider: "whisper.cpp",
+      ttsProvider: "speaches-kokoro",
+      kokoroUrl: "http://speaches.lan:8000/v1/audio/speech",
+    }));
+    expect(loadConfig(path).kokoroUrl).toBe("http://speaches.lan:8000/v1/audio/speech");
+
+    for (const kokoroUrl of [
+      "http://speaches.lan:8000/v1/audio/speech",
+      "http://localhost:8000/not-speech",
+      "http://user:password@localhost:8000/v1/audio/speech",
+    ]) {
+      writeFileSync(path, JSON.stringify({
+        sttProvider: "whisper.cpp",
+        ttsProvider: "speaches-kokoro",
+        ttsApiKey: "local-secret",
+        kokoroUrl,
+      }));
+      expect(() => loadConfig(path)).toThrow(/kokoroUrl|loopback/);
+    }
+
+    writeFileSync(path, JSON.stringify({
+      sttProvider: "whisper.cpp",
+      ttsProvider: "speaches-kokoro",
+      ttsSpeed: 2.1,
+    }));
+    expect(() => loadConfig(path)).toThrow(/ttsSpeed.*0\.5.*2/);
+    rmSync(directory, { recursive: true, force: true });
+  });
+
   it("selects whisper.cpp explicitly with local defaults and no API key", () => {
     const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
     const path = join(directory, "config.json");

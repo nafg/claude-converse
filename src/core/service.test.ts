@@ -43,6 +43,16 @@ const kokoroConfig = () => ({
   kokoroVoice: "af_heart",
 });
 
+const speachesKokoroConfig = (ttsApiKey?: string) => ({
+  ...whisperCppConfig(),
+  ttsProvider: "speaches-kokoro" as const,
+  ttsApiKey,
+  kokoroUrl: "http://localhost:8000/v1/audio/speech",
+  kokoroModel: "speaches-ai/Kokoro-82M-v1.0-ONNX",
+  kokoroVoice: "af_heart",
+  ttsSpeed: 1.25,
+});
+
 const groqConfig = () => ({
   ...kokoroConfig(),
   sttProvider: "groq" as const,
@@ -222,6 +232,58 @@ describe("ConverseService API authentication", () => {
     });
   });
 
+  it("sends Speaches Kokoro ONNX its configurable request and optional local TTS key", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(Buffer.from("wav"), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new ConverseService(speachesKokoroConfig("local-secret"), "test-owner") as unknown as ServiceInternals;
+
+    await service.synthesize("hello");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://localhost:8000/v1/audio/speech");
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const headers = new Headers(request.headers);
+    expect(headers.get("authorization")).toBe("Bearer local-secret");
+    expect(headers.get("content-type")).toBe("application/json");
+    expect(JSON.parse(request.body as string)).toEqual({
+      model: "speaches-ai/Kokoro-82M-v1.0-ONNX",
+      input: "hello",
+      voice: "af_heart",
+      response_format: "wav",
+      speed: 1.25,
+    });
+  });
+
+  it("keeps keyless Speaches Kokoro ONNX speech requests unauthenticated", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(Buffer.from("wav"), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new ConverseService(speachesKokoroConfig(), "test-owner") as unknown as ServiceInternals;
+
+    await service.synthesize("hello");
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(request.headers).get("authorization")).toBeNull();
+  });
+
+  it("keeps a Speaches Kokoro TTS key off transcription requests", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ text: "hello" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new ConverseService(speachesKokoroConfig("local-secret"), "test-owner") as unknown as ServiceInternals;
+
+    await service.transcribe(Buffer.alloc(960));
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(request.headers).get("authorization")).toBeNull();
+  });
+
+  it("identifies Speaches Kokoro ONNX speech failures", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("model unavailable", { status: 503 })));
+    const service = new ConverseService(speachesKokoroConfig(), "test-owner") as unknown as ServiceInternals;
+
+    await expect(service.synthesize("hello")).rejects.toThrow(
+      "Speaches Kokoro ONNX speech request failed: 503: model unavailable",
+    );
+  });
+
   it("identifies Kokoro speech failures", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("model unavailable", { status: 503 })));
     const service = new ConverseService(kokoroConfig(), "test-owner") as unknown as ServiceInternals;
@@ -283,6 +345,19 @@ describe("ConverseService API authentication", () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(Buffer.from("wav"), { status: 200 })));
     vi.stubGlobal("fetch", fetchMock);
     const service = new ConverseService(kokoroConfig(), "test-owner");
+    (service as unknown as { playWav: () => Promise<void> }).playWav = async () => undefined;
+
+    await service.speak("First sentence. Second sentence.", "test-owner");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const spoken = fetchMock.mock.calls.map((call) => JSON.parse((call[1] as RequestInit).body as string).input);
+    expect(spoken).toEqual(["First sentence.", "Second sentence."]);
+  });
+
+  it("keeps long Speaches Kokoro replies chunked through the common service path", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(new Response(Buffer.from("wav"), { status: 200 })));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new ConverseService(speachesKokoroConfig(), "test-owner");
     (service as unknown as { playWav: () => Promise<void> }).playWav = async () => undefined;
 
     await service.speak("First sentence. Second sentence.", "test-owner");

@@ -1,7 +1,7 @@
 {
   "sttProvider": "speaches",
   "sttApiKey": "",
-  "ttsProvider": "kokoro",
+  "ttsProvider": "speaches-kokoro",
   "ttsApiKey": "",
   "apiTimeoutMs": 60000,
 
@@ -10,8 +10,8 @@
   "whisperLanguage": "en",
   "whisperPrompt": "Programming and software-development vocabulary",
 
-  "kokoroUrl": "http://localhost:8880/v1/audio/speech",
-  "kokoroModel": "kokoro",
+  "kokoroUrl": "http://localhost:8000/v1/audio/speech",
+  "kokoroModel": "speaches-ai/Kokoro-82M-v1.0-ONNX",
   "kokoroVoice": "af_heart",
   "ttsSpeed": 1.25,
 
