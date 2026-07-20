@@ -46,7 +46,7 @@ export interface ConverseConfig {
   port: number;
 }
 
-export type SttProvider = "local" | "openai" | "groq" | "whisper.cpp";
+export type SttProvider = "local" | "openai" | "groq" | "speaches" | "whisper.cpp";
 export type TtsProvider = "local" | "openai" | "kokoro";
 type LegacyAudioProvider = "local" | "openai";
 type FileConfig = Partial<Omit<ConverseConfig, "voiceProvider" | "apiKey">> & {
@@ -126,7 +126,7 @@ const readFileConfig = (path: string): FileConfig => {
     const valid = kind === "string[]"
       ? Array.isArray(item) && item.every((entry) => typeof entry === "string")
       : kind === "stt-provider"
-        ? item === "local" || item === "openai" || item === "groq" || item === "whisper.cpp"
+        ? item === "local" || item === "openai" || item === "groq" || item === "speaches" || item === "whisper.cpp"
         : kind === "tts-provider"
           ? item === "local" || item === "openai" || item === "kokoro"
           : kind === "legacy-provider"
@@ -166,8 +166,8 @@ const legacyProviderEnv = (name: string): LegacyAudioProvider | undefined => {
 const sttProviderEnv = (): SttProvider | undefined => {
   const configured = process.env.CONVERSE_STT_PROVIDER?.trim().toLowerCase();
   if (!configured) return undefined;
-  if (configured === "local" || configured === "openai" || configured === "groq" || configured === "whisper.cpp") return configured;
-  throw new Error(`CONVERSE_STT_PROVIDER=${configured} is unsupported; use local, whisper.cpp, groq, or openai`);
+  if (configured === "local" || configured === "openai" || configured === "groq" || configured === "speaches" || configured === "whisper.cpp") return configured;
+  throw new Error(`CONVERSE_STT_PROVIDER=${configured} is unsupported; use local, whisper.cpp, speaches, groq, or openai`);
 };
 
 const ttsProviderEnv = (): TtsProvider | undefined => {
@@ -202,6 +202,22 @@ const isGroqTranscriptionUrl = (value: string): boolean => {
   }
 };
 
+const speachesTranscriptionUrl = (value: string): URL | undefined => {
+  try {
+    const url = new URL(value);
+    if ((url.protocol !== "http:" && url.protocol !== "https:")
+      || url.pathname !== "/v1/audio/transcriptions"
+      || url.username
+      || url.password) return undefined;
+    return url;
+  } catch {
+    return undefined;
+  }
+};
+
+const isLoopbackHost = (hostname: string): boolean =>
+  hostname === "localhost" || hostname === "::1" || hostname === "[::1]" || /^127(?:\.\d{1,3}){3}$/.test(hostname);
+
 export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
   const file = readFileConfig(path);
   const environmentProvider = legacyVoiceProvider();
@@ -210,7 +226,7 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
   const environmentApiKey = process.env.OPENAI_API_KEY?.trim();
   const sttApiKey = sttProvider === "openai"
     ? file.sttApiKey ?? file.apiKey ?? process.env.OPENAI_STT_API_KEY?.trim() ?? environmentApiKey
-    : sttProvider === "groq"
+    : sttProvider === "groq" || sttProvider === "speaches"
       ? file.sttApiKey
       : undefined;
   const ttsApiKey = ttsProvider === "openai"
@@ -224,7 +240,9 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
     ? "https://api.openai.com/v1/audio/transcriptions"
     : sttProvider === "groq"
       ? "https://api.groq.com/openai/v1/audio/transcriptions"
-      : "http://localhost:2022/v1/audio/transcriptions");
+      : sttProvider === "speaches"
+        ? "http://localhost:8000/v1/audio/transcriptions"
+        : "http://localhost:2022/v1/audio/transcriptions");
   const kokoroUrl = file.kokoroUrl ?? process.env.KOKORO_URL ?? (ttsProvider === "openai" ? "https://api.openai.com/v1/audio/speech" : "http://localhost:8880/v1/audio/speech");
 
   if (bytesPerSample !== 2) throw new Error(`bytesPerSample=${bytesPerSample} is unsupported; only 2-byte S16_LE audio is supported`);
@@ -240,6 +258,13 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
   }
   if (sttProvider === "groq" && !isGroqTranscriptionUrl(whisperUrl)) {
     throw new Error("whisperUrl must use https://api.groq.com/openai/v1/audio/transcriptions when sttProvider is groq");
+  }
+  if (sttProvider === "speaches") {
+    const url = speachesTranscriptionUrl(whisperUrl);
+    if (!url) throw new Error("whisperUrl must be an HTTP(S) /v1/audio/transcriptions URL without embedded credentials when sttProvider is speaches");
+    if (sttApiKey && !isLoopbackHost(url.hostname)) {
+      throw new Error("sttApiKey may be used with Speaches only on a loopback whisperUrl");
+    }
   }
   if (ttsProvider === "openai" && !isOpenAiUrl(kokoroUrl)) {
     throw new Error("kokoroUrl must use https://api.openai.com when ttsProvider is openai");
@@ -281,9 +306,11 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
       ? "gpt-4o-transcribe"
       : sttProvider === "groq"
         ? "whisper-large-v3-turbo"
-        : sttProvider === "whisper.cpp"
-          ? "base.en"
-          : "base"),
+        : sttProvider === "speaches"
+          ? "Systran/faster-distil-whisper-small.en"
+          : sttProvider === "whisper.cpp"
+            ? "base.en"
+            : "base"),
     whisperLanguage: file.whisperLanguage ?? process.env.WHISPER_LANGUAGE ?? "en",
     whisperPrompt: file.whisperPrompt ?? process.env.WHISPER_INITIAL_PROMPT ?? "",
     kokoroUrl,

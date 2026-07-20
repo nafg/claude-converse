@@ -53,6 +53,16 @@ const groqConfig = () => ({
   whisperPrompt: "Programming terms",
 });
 
+const speachesConfig = (sttApiKey?: string) => ({
+  ...kokoroConfig(),
+  sttProvider: "speaches" as const,
+  sttApiKey,
+  whisperUrl: "http://localhost:8000/v1/audio/transcriptions",
+  whisperModel: "Systran/faster-distil-whisper-small.en",
+  whisperLanguage: "en",
+  whisperPrompt: "Programming terms",
+});
+
 afterEach(() => vi.unstubAllGlobals());
 
 describe("ConverseService API authentication", () => {
@@ -101,6 +111,46 @@ describe("ConverseService API authentication", () => {
     expect(form.get("file")).toBeInstanceOf(Blob);
   });
 
+  it("sends Speaches configurable multipart fields and its optional local key", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ text: "hello" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new ConverseService(speachesConfig("local-secret"), "test-owner") as unknown as ServiceInternals;
+
+    await service.transcribe(Buffer.alloc(960));
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://localhost:8000/v1/audio/transcriptions");
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(request.headers).get("authorization")).toBe("Bearer local-secret");
+    const form = request.body as FormData;
+    expect(form.get("model")).toBe("Systran/faster-distil-whisper-small.en");
+    expect(form.get("response_format")).toBe("json");
+    expect(form.get("language")).toBe("en");
+    expect(form.get("prompt")).toBe("Programming terms");
+    expect(form.get("file")).toBeInstanceOf(Blob);
+  });
+
+  it("keeps keyless Speaches requests unauthenticated", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ text: "hello" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new ConverseService(speachesConfig(), "test-owner") as unknown as ServiceInternals;
+
+    await service.transcribe(Buffer.alloc(960));
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(request.headers).get("authorization")).toBeNull();
+  });
+
+  it("never attaches a Speaches STT key to Kokoro speech", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(Buffer.from("wav"), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const service = new ConverseService(speachesConfig("local-secret"), "test-owner") as unknown as ServiceInternals;
+
+    await service.synthesize("hello");
+
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(new Headers(request.headers).get("authorization")).toBeNull();
+  });
+
   it("never attaches the Groq STT key to Kokoro speech", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(Buffer.from("wav"), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
@@ -118,6 +168,15 @@ describe("ConverseService API authentication", () => {
 
     await expect(service.transcribe(Buffer.alloc(960))).rejects.toThrow(
       "Groq transcription request failed: 429: rate limit",
+    );
+  });
+
+  it("identifies Speaches transcription failures", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("model unavailable", { status: 503 })));
+    const service = new ConverseService(speachesConfig(), "test-owner") as unknown as ServiceInternals;
+
+    await expect(service.transcribe(Buffer.alloc(960))).rejects.toThrow(
+      "Speaches transcription request failed: 503: model unavailable",
     );
   });
 

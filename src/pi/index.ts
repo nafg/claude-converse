@@ -161,9 +161,11 @@ export default function conversePiExtension(pi: ExtensionAPI) {
           ? "OpenAI"
           : config.sttProvider === "groq"
             ? "Groq"
-            : config.sttProvider === "whisper.cpp"
-              ? "whisper.cpp"
-              : "local Whisper";
+            : config.sttProvider === "speaches"
+              ? "Speaches"
+              : config.sttProvider === "whisper.cpp"
+                ? "whisper.cpp"
+                : "local Whisper";
         const ttsBackend = config.ttsProvider === "openai"
           ? "OpenAI"
           : config.ttsProvider === "kokoro"

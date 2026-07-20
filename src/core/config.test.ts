@@ -316,6 +316,66 @@ describe("loadConfig", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  it("selects Speaches independently with documented defaults and optional loopback authentication", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
+    const path = join(directory, "config.json");
+
+    writeFileSync(path, JSON.stringify({ sttProvider: "speaches", ttsProvider: "kokoro" }));
+    expect(loadConfig(path)).toMatchObject({
+      sttProvider: "speaches",
+      ttsProvider: "kokoro",
+      voiceProvider: "local",
+      sttApiKey: undefined,
+      whisperUrl: "http://localhost:8000/v1/audio/transcriptions",
+      whisperModel: "Systran/faster-distil-whisper-small.en",
+      whisperLanguage: "en",
+    });
+
+    writeFileSync(path, JSON.stringify({
+      sttProvider: "speaches",
+      sttApiKey: "local-secret",
+      ttsProvider: "kokoro",
+      whisperUrl: "https://127.0.0.1:8443/v1/audio/transcriptions",
+      whisperModel: "Systran/faster-whisper-small.en",
+      whisperPrompt: "Programming terms",
+    }));
+    expect(loadConfig(path)).toMatchObject({
+      sttProvider: "speaches",
+      sttApiKey: "local-secret",
+      whisperUrl: "https://127.0.0.1:8443/v1/audio/transcriptions",
+      whisperModel: "Systran/faster-whisper-small.en",
+      whisperPrompt: "Programming terms",
+    });
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("allows keyless custom Speaches endpoints but protects configured credentials", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
+    const path = join(directory, "config.json");
+
+    writeFileSync(path, JSON.stringify({
+      sttProvider: "speaches",
+      ttsProvider: "local",
+      whisperUrl: "http://speaches.lan:8000/v1/audio/transcriptions",
+    }));
+    expect(loadConfig(path).whisperUrl).toBe("http://speaches.lan:8000/v1/audio/transcriptions");
+
+    for (const whisperUrl of [
+      "http://speaches.lan:8000/v1/audio/transcriptions",
+      "http://localhost:8000/not-transcription",
+      "http://user:password@localhost:8000/v1/audio/transcriptions",
+    ]) {
+      writeFileSync(path, JSON.stringify({
+        sttProvider: "speaches",
+        sttApiKey: "local-secret",
+        ttsProvider: "local",
+        whisperUrl,
+      }));
+      expect(() => loadConfig(path)).toThrow(/whisperUrl|loopback/);
+    }
+    rmSync(directory, { recursive: true, force: true });
+  });
+
   it("selects whisper.cpp explicitly with local defaults and no API key", () => {
     const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
     const path = join(directory, "config.json");

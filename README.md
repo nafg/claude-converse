@@ -7,7 +7,7 @@ This branch rebuilds Converse around a shared **TypeScript voice core**:
 - **Claude adapter**: runs a localhost HTTP daemon
 - **Pi adapter**: runs the same service in-process inside the extension
 - **Linux audio tools**: microphone capture via `parecord`, playback via `paplay` by default
-- **Independent STT/TTS backends**: mix local whisper.cpp/Kokoro HTTP with hosted OpenAI or Groq audio APIs
+- **Independent STT/TTS backends**: mix local whisper.cpp, Speaches, and Kokoro HTTP with hosted OpenAI or Groq audio APIs
 
 ## Current architecture
 
@@ -40,7 +40,7 @@ You need:
 - Node.js
 - `parecord` / `paplay` (usually from PulseAudio/PipeWire Pulse tools)
 - **hosted:** an OpenAI or Groq API key stored in the user config
-- **local:** a Whisper-compatible server, a Kokoro-compatible TTS server, or one of each alongside a hosted provider
+- **local:** a Whisper-compatible server, a Speaches server, a Kokoro-compatible TTS server, or one of each alongside a hosted provider
 
 ## Configuration
 
@@ -95,6 +95,32 @@ The endpoint and `whisper-large-v3-turbo` default follow Groq's [speech-to-text 
 
 Groq's [pricing page](https://groq.com/pricing) states that audio is billed with a ten-second minimum per request. Converse transcribes at detected pauses, so frequent very short utterances can be billed as ten seconds each even though `whisper-large-v3-turbo` has a low hourly rate.
 
+#### Speaches Faster-Whisper transcription
+
+[Speaches](https://github.com/speaches-ai/speaches) exposes Faster-Whisper models through an OpenAI-compatible local API. Select it independently from TTS; [`config.speaches-kokoro.example.json`](config.speaches-kokoro.example.json) is a complete local combination. The essential settings are:
+
+```json
+{
+  "sttProvider": "speaches",
+  "whisperUrl": "http://localhost:8000/v1/audio/transcriptions",
+  "whisperModel": "Systran/faster-distil-whisper-small.en",
+  "whisperLanguage": "en",
+  "whisperPrompt": "Programming and software-development vocabulary",
+  "ttsProvider": "kokoro"
+}
+```
+
+The default model follows Speaches' current [speech-to-text guide](https://speaches.ai/usage/speech-to-text/), which uses `Systran/faster-distil-whisper-small.en` as a practical fast English model. Download it before use:
+
+```bash
+SPEACHES_BASE_URL=http://localhost:8000 \
+  uvx speaches-cli model download Systran/faster-distil-whisper-small.en
+```
+
+Speaches publishes separate [CPU and CUDA container instructions](https://speaches.ai/installation/). Its Faster-Whisper settings support `WHISPER__INFERENCE_DEVICE=cpu` or `cuda`; `WHISPER__COMPUTE_TYPE=int8` is a useful CPU-oriented starting point, while CUDA users should benchmark the supported float16 or int8 variants on their own GPU. These configure the external Speaches process, not Converse; Converse only selects its endpoint and model.
+
+Authentication is optional. Set `sttApiKey` in the Converse config only if the local Speaches server has API-key protection enabled. Authenticated Speaches URLs are restricted to loopback addresses (`localhost`, `127.x.x.x`, or `::1`), the exact `/v1/audio/transcriptions` path, and no URL-embedded credentials. This prevents a typo or remote override from receiving the key. Keyless Speaches may use a custom HTTP(S) host with that exact path, such as a trusted LAN server. The STT key is never attached to TTS.
+
 #### whisper.cpp transcription
 
 Select the existing OpenAI-compatible `whisper-server` explicitly with:
@@ -134,15 +160,15 @@ Legacy environment variables and their corresponding file settings:
 
 - `CONVERSE_HOST` → `host` — default `127.0.0.1`
 - `CONVERSE_PORT` → `port` — default `45839`
-- `CONVERSE_STT_PROVIDER` → `sttProvider` — independently selects `openai`, `groq`, `whisper.cpp`, or the compatibility alias `local` for transcription
+- `CONVERSE_STT_PROVIDER` → `sttProvider` — independently selects `openai`, `groq`, `speaches`, `whisper.cpp`, or the compatibility alias `local` for transcription
 - `CONVERSE_TTS_PROVIDER` → `ttsProvider` — independently selects `openai`, `kokoro`, or the compatibility alias `local` for speech
-- `OPENAI_STT_API_KEY` → `sttApiKey` — legacy environment fallback used only for OpenAI transcription; set `sttApiKey` in the file for Groq
+- `OPENAI_STT_API_KEY` → `sttApiKey` — legacy environment fallback used only for OpenAI transcription; set `sttApiKey` in the file for Groq or optional loopback Speaches authentication
 - `OPENAI_TTS_API_KEY` → `ttsApiKey` — used only for OpenAI speech
 - `CONVERSE_VOICE_PROVIDER` → legacy `voiceProvider` — coupled fallback for both providers
 - `OPENAI_API_KEY` → legacy `apiKey` — shared fallback key for existing installations
 - `CONVERSE_API_TIMEOUT_MS` → `apiTimeoutMs` — maximum time for each transcription or speech request; default `60000`
-- `WHISPER_URL` → `whisperUrl` — transcription URL; defaults to the selected hosted API or `http://localhost:2022/v1/audio/transcriptions` for local providers. Hosted modes restrict URLs to their official HTTPS endpoint so keys cannot be sent to arbitrary overrides.
-- `WHISPER_MODEL` → `whisperModel` — defaults to `gpt-4o-transcribe` on OpenAI, `whisper-large-v3-turbo` on Groq, `base.en` for explicit `whisper.cpp`, or `base` for legacy `local`
+- `WHISPER_URL` → `whisperUrl` — transcription URL; defaults to the selected hosted API, `http://localhost:8000/v1/audio/transcriptions` for Speaches, or `http://localhost:2022/v1/audio/transcriptions` for other local providers. Hosted modes restrict URLs to their official HTTPS endpoint; authenticated Speaches is loopback-only.
+- `WHISPER_MODEL` → `whisperModel` — defaults to `gpt-4o-transcribe` on OpenAI, `whisper-large-v3-turbo` on Groq, `Systran/faster-distil-whisper-small.en` on Speaches, `base.en` for explicit `whisper.cpp`, or `base` for legacy `local`
 - `WHISPER_LANGUAGE` → `whisperLanguage` — default `en`
 - `WHISPER_INITIAL_PROMPT` → `whisperPrompt` — default empty
 - `KOKORO_URL` → `kokoroUrl` — speech URL; defaults to OpenAI or `http://localhost:8880/v1/audio/speech` for Kokoro-compatible providers
