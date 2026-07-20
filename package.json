@@ -23,7 +23,7 @@
     "CLAUDE.md",
     "LICENSE",
     "README.md",
-    "config*.json"
+    "config.example.conf"
   ],
   "bin": {
     "converse-claude-daemon": "./dist/claude/daemon.js",
@@ -45,6 +45,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "hocon-config": "^1.0.94",
     "typebox": "^1.3.6"
   },
   "devDependencies": {

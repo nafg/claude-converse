@@ -1,615 +1,424 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { defaultConfigPath, loadConfig } from "./config.js";
 
-const missingConfigPath = join(tmpdir(), "claude-converse-test-missing", "config.json");
-const loadEnvConfig = () => loadConfig(missingConfigPath);
+const referenceConfig = () => readFileSync(join(process.cwd(), "config.example.conf"), "utf8");
 
-const configEnv = [
-  "CONVERSE_PORT",
-  "VAD_BARGE_IN_ENERGY_MULT",
-  "CONVERSE_BYTES_PER_SAMPLE",
-  "CONVERSE_VOICE_PROVIDER",
-  "CONVERSE_STT_PROVIDER",
-  "CONVERSE_TTS_PROVIDER",
-  "CONVERSE_API_TIMEOUT_MS",
-  "CONVERSE_TTS_SPEED",
-  "CONVERSE_TTS_VOICE",
-  "CONVERSE_VOICE_WAIT_MS",
-  "OPENAI_API_KEY",
-  "OPENAI_STT_API_KEY",
-  "OPENAI_TTS_API_KEY",
-  "WHISPER_URL",
-  "WHISPER_MODEL",
-  "WHISPER_INITIAL_PROMPT",
-  "KOKORO_URL",
-  "KOKORO_VOICE",
-  "KOKORO_MODEL",
-] as const;
-
-const originalEnv = new Map(configEnv.map((name) => [name, process.env[name]]));
-
-beforeEach(() => {
-  for (const name of configEnv) delete process.env[name];
-});
+// Each test writes a HOCON file into a throwaway directory and loads it by path.
+const dirs: string[] = [];
+const writeConf = (contents: string): string => {
+  const directory = mkdtempSync(join(tmpdir(), "claude-converse-"));
+  dirs.push(directory);
+  const path = join(directory, "config.conf");
+  writeFileSync(path, contents);
+  return path;
+};
 
 afterEach(() => {
-  for (const name of configEnv) {
-    const value = originalEnv.get(name);
-    if (value === undefined) delete process.env[name];
-    else process.env[name] = value;
-  }
+  while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
 });
 
 describe("loadConfig", () => {
-  it("falls back on invalid numeric env vars", () => {
-    process.env.CONVERSE_PORT = "abc";
-    process.env.VAD_BARGE_IN_ENERGY_MULT = "nan";
-    const config = loadEnvConfig();
-    expect(config.port).toBe(45839);
-    expect(config.vadBargeInEnergyMultiplier).toBe(2);
-    expect(config.vadUtteranceEndFrames).toBe(60);
+  it("defaults to local whisper.cpp and Kokoro when nothing is configured", () => {
+    const path = join(tmpdir(), "claude-converse-absent", "config.conf");
+    expect(loadConfig(path)).toMatchObject({
+      sttProvider: "whisper.cpp",
+      whisperUrl: "http://localhost:2022/v1/audio/transcriptions",
+      whisperModel: "base.en",
+      sttApiKey: undefined,
+      ttsProvider: "kokoro",
+      kokoroUrl: "http://localhost:8880/v1/audio/speech",
+      kokoroModel: "kokoro",
+      kokoroVoice: "af_heart",
+      ttsApiKey: undefined,
+      port: 45839,
+      ttsSpeed: 1.25,
+    });
   });
 
   it("rejects unsupported bytes-per-sample values", () => {
-    process.env.CONVERSE_BYTES_PER_SAMPLE = "4";
-    expect(() => loadEnvConfig()).toThrow(/unsupported/);
-  });
-
-  it("automatically uses OpenAI when its API key is available", () => {
-    process.env.OPENAI_API_KEY = "test-key";
-
-    const config = loadEnvConfig();
-
-    expect(config).toMatchObject({
-      sttProvider: "openai",
-      ttsProvider: "openai",
-      voiceProvider: "openai",
-      sttApiKey: "test-key",
-      ttsApiKey: "test-key",
-      apiKey: "test-key",
-      apiTimeoutMs: 60_000,
-      ttsSpeed: 1.25,
-      voiceWaitMs: 5_000,
-      whisperUrl: "https://api.openai.com/v1/audio/transcriptions",
-      whisperModel: "gpt-4o-transcribe",
-      kokoroUrl: "https://api.openai.com/v1/audio/speech",
-      kokoroVoice: "alloy",
-      kokoroModel: "gpt-4o-mini-tts",
-    });
-  });
-
-  it("uses the provider-neutral TTS voice override", () => {
-    process.env.OPENAI_API_KEY = "test-key";
-    process.env.CONVERSE_TTS_VOICE = "marin";
-    process.env.KOKORO_VOICE = "legacy-voice";
-
-    expect(loadEnvConfig().kokoroVoice).toBe("marin");
-  });
-
-  it("permits opting out of OpenAI and retaining the local defaults", () => {
-    process.env.OPENAI_API_KEY = "test-key";
-    process.env.CONVERSE_VOICE_PROVIDER = "local";
-
-    const config = loadEnvConfig();
-
-    expect(config).toMatchObject({
-      sttProvider: "local",
-      ttsProvider: "local",
-      voiceProvider: "local",
-      sttApiKey: undefined,
-      ttsApiKey: undefined,
-      apiKey: undefined,
-      whisperUrl: "http://localhost:2022/v1/audio/transcriptions",
-      whisperModel: "base",
-      kokoroUrl: "http://localhost:8880/v1/audio/speech",
-      kokoroVoice: "af_heart",
-      kokoroModel: "kokoro",
-    });
-  });
-
-  it("requires a key when OpenAI is explicitly selected", () => {
-    process.env.CONVERSE_VOICE_PROVIDER = "openai";
-    expect(() => loadEnvConfig()).toThrow(/sttApiKey/);
-  });
-
-  it("does not send the OpenAI key to a URL override", () => {
-    process.env.OPENAI_API_KEY = "test-key";
-    process.env.WHISPER_URL = "http://localhost:2022/v1/audio/transcriptions";
-    expect(() => loadEnvConfig()).toThrow(/must use https:\/\/api\.openai\.com/);
+    const path = writeConf(`audio {\n  bytesPerSample = 4\n}`);
+    expect(() => loadConfig(path)).toThrow(/unsupported/);
   });
 
   it("rejects non-positive API timeouts", () => {
-    process.env.CONVERSE_API_TIMEOUT_MS = "0";
-    expect(() => loadEnvConfig()).toThrow(/positive number/);
+    const path = writeConf(`runtime {\n  apiTimeoutMs = 0\n}`);
+    expect(() => loadConfig(path)).toThrow(/positive number/);
   });
 
   it("rejects unsupported speech speeds", () => {
-    process.env.CONVERSE_TTS_SPEED = "4.1";
-    expect(() => loadEnvConfig()).toThrow(/between 0.25 and 4/);
+    const path = writeConf(`tts {\n  provider = "kokoro"\n  speed = 4.1\n}`);
+    expect(() => loadConfig(path)).toThrow(/between 0.25 and 4/);
   });
 
-  it("loads explicit file settings ahead of environment fallbacks", () => {
-    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
-    const path = join(directory, "config.json");
-    process.env.CONVERSE_PORT = "1000";
-    process.env.OPENAI_API_KEY = "environment-key";
-    writeFileSync(path, JSON.stringify({
-      voiceProvider: "local",
-      apiKey: "file-key",
-      port: 2345,
-      sampleRate: 48_000,
-      recorderAdditionalArgs: ["--raw", "--verbose"],
-      statusPrefix: "voice: ",
-      kokoroVoice: "af_sky",
-    }));
-
-    expect(loadConfig(path)).toMatchObject({
-      sttProvider: "local",
-      ttsProvider: "local",
-      voiceProvider: "local",
-      apiKey: undefined,
-      port: 2345,
-      sampleRate: 48_000,
-      recorderAdditionalArgs: ["--raw", "--verbose"],
-      statusPrefix: "voice: ",
-      kokoroVoice: "af_sky",
-    });
-    rmSync(directory, { recursive: true, force: true });
-  });
-
-  it("accepts a complete OpenAI configuration without environment variables", () => {
-    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
-    const path = join(directory, "config.json");
-    writeFileSync(path, JSON.stringify({ voiceProvider: "openai", apiKey: "file-key", ttsSpeed: 1.5 }));
-
+  it("accepts a complete OpenAI configuration on both sides", () => {
+    const path = writeConf(`
+      stt {
+        provider = "openai"
+        openai {
+          apiKey = "stt-key"
+        }
+      }
+      tts {
+        provider = "openai"
+        openai {
+          apiKey = "tts-key"
+          speed = 1.5
+        }
+      }
+    `);
     expect(loadConfig(path)).toMatchObject({
       sttProvider: "openai",
       ttsProvider: "openai",
-      voiceProvider: "openai",
-      sttApiKey: "file-key",
-      ttsApiKey: "file-key",
-      apiKey: "file-key",
-      whisperModel: "gpt-4o-transcribe",
-      kokoroModel: "gpt-4o-mini-tts",
-      ttsSpeed: 1.5,
-    });
-    rmSync(directory, { recursive: true, force: true });
-  });
-
-  it("selects OpenAI independently for STT and TTS from the file", () => {
-    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
-    const path = join(directory, "config.json");
-    writeFileSync(path, JSON.stringify({
-      sttProvider: "openai",
-      ttsProvider: "local",
       sttApiKey: "stt-key",
-    }));
-
-    expect(loadConfig(path)).toMatchObject({
-      sttProvider: "openai",
-      ttsProvider: "local",
-      voiceProvider: "mixed",
-      sttApiKey: "stt-key",
-      ttsApiKey: undefined,
-      apiKey: undefined,
+      ttsApiKey: "tts-key",
       whisperUrl: "https://api.openai.com/v1/audio/transcriptions",
       whisperModel: "gpt-4o-transcribe",
-      kokoroUrl: "http://localhost:8880/v1/audio/speech",
-      kokoroModel: "kokoro",
-      kokoroVoice: "af_heart",
-    });
-
-    writeFileSync(path, JSON.stringify({
-      sttProvider: "local",
-      ttsProvider: "openai",
-      ttsApiKey: "tts-key",
-      ttsSpeed: 1.5,
-    }));
-    expect(loadConfig(path)).toMatchObject({
-      sttProvider: "local",
-      ttsProvider: "openai",
-      voiceProvider: "mixed",
-      sttApiKey: undefined,
-      ttsApiKey: "tts-key",
-      whisperUrl: "http://localhost:2022/v1/audio/transcriptions",
-      whisperModel: "base",
       kokoroUrl: "https://api.openai.com/v1/audio/speech",
       kokoroModel: "gpt-4o-mini-tts",
       kokoroVoice: "alloy",
       ttsSpeed: 1.5,
     });
-    rmSync(directory, { recursive: true, force: true });
   });
 
-  it("validates only the OpenAI side's endpoint", () => {
-    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
-    const path = join(directory, "config.json");
-    writeFileSync(path, JSON.stringify({
+  it("requires a key when OpenAI or Groq is selected", () => {
+    const openaiStt = writeConf(`stt {\n  provider = "openai"\n}`);
+    expect(() => loadConfig(openaiStt)).toThrow(/sttApiKey.*openai/);
+    const openaiTts = writeConf(`tts {\n  provider = "openai"\n}`);
+    expect(() => loadConfig(openaiTts)).toThrow(/ttsApiKey.*openai/);
+    const groqStt = writeConf(`stt {\n  provider = "groq"\n}`);
+    expect(() => loadConfig(groqStt)).toThrow(/sttApiKey.*groq/);
+  });
+
+  it("selects OpenAI independently for STT and TTS", () => {
+    const sttOnly = writeConf(`
+      stt {
+        provider = "openai"
+        openai {
+          apiKey = "stt-key"
+        }
+      }
+      tts {
+        provider = "local"
+      }
+    `);
+    expect(loadConfig(sttOnly)).toMatchObject({
       sttProvider: "openai",
       ttsProvider: "local",
       sttApiKey: "stt-key",
-      whisperUrl: "https://example.com/v1/audio/transcriptions",
-    }));
-    expect(() => loadConfig(path)).toThrow(/whisperUrl.*api\.openai\.com/);
+      ttsApiKey: undefined,
+      whisperUrl: "https://api.openai.com/v1/audio/transcriptions",
+      kokoroUrl: "http://localhost:8880/v1/audio/speech",
+      kokoroModel: "kokoro",
+    });
 
-    writeFileSync(path, JSON.stringify({
+    const ttsOnly = writeConf(`
+      stt {
+        provider = "local"
+      }
+      tts {
+        provider = "openai"
+        openai {
+          apiKey = "tts-key"
+        }
+      }
+    `);
+    expect(loadConfig(ttsOnly)).toMatchObject({
       sttProvider: "local",
       ttsProvider: "openai",
+      sttApiKey: undefined,
       ttsApiKey: "tts-key",
-      kokoroUrl: "http://localhost:8880/v1/audio/speech",
-    }));
-    expect(() => loadConfig(path)).toThrow(/kokoroUrl.*api\.openai\.com/);
-    rmSync(directory, { recursive: true, force: true });
+      whisperUrl: "http://localhost:2022/v1/audio/transcriptions",
+      kokoroUrl: "https://api.openai.com/v1/audio/speech",
+      kokoroModel: "gpt-4o-mini-tts",
+    });
   });
 
-  it("selects Kokoro explicitly with local defaults and no API key", () => {
-    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
-    const path = join(directory, "config.json");
-    writeFileSync(path, JSON.stringify({
-      sttProvider: "whisper.cpp",
-      ttsProvider: "kokoro",
-      ttsApiKey: "must-not-be-used",
-      kokoroUrl: "http://127.0.0.1:9999/v1/audio/speech",
-      kokoroModel: "kokoro-v1",
-      kokoroVoice: "af_sky",
-    }));
+  it("validates only the OpenAI side's endpoint", () => {
+    const stt = writeConf(`
+      stt {
+        provider = "openai"
+        openai {
+          apiKey = "stt-key"
+          url = "https://example.com/v1/audio/transcriptions"
+        }
+      }
+      tts {
+        provider = "local"
+      }
+    `);
+    expect(() => loadConfig(stt)).toThrow(/whisperUrl.*api\.openai\.com/);
 
-    expect(loadConfig(path)).toMatchObject({
+    const tts = writeConf(`
+      stt {
+        provider = "local"
+      }
+      tts {
+        provider = "openai"
+        openai {
+          apiKey = "tts-key"
+          url = "http://localhost:8880/v1/audio/speech"
+        }
+      }
+    `);
+    expect(() => loadConfig(tts)).toThrow(/kokoroUrl.*api\.openai\.com/);
+  });
+
+  it("selects Kokoro with local defaults and never sends a key", () => {
+    const custom = writeConf(`
+      stt {
+        provider = "whisper.cpp"
+      }
+      tts {
+        provider = "kokoro"
+        kokoro {
+          apiKey = "must-not-be-used"
+          url = "http://127.0.0.1:9999/v1/audio/speech"
+          model = "kokoro-v1"
+          voice = "af_sky"
+        }
+      }
+    `);
+    expect(loadConfig(custom)).toMatchObject({
       sttProvider: "whisper.cpp",
       ttsProvider: "kokoro",
-      voiceProvider: "local",
       ttsApiKey: undefined,
       kokoroUrl: "http://127.0.0.1:9999/v1/audio/speech",
       kokoroModel: "kokoro-v1",
       kokoroVoice: "af_sky",
     });
 
-    writeFileSync(path, JSON.stringify({ sttProvider: "whisper.cpp", ttsProvider: "kokoro" }));
-    expect(loadConfig(path)).toMatchObject({
+    const defaults = writeConf(`tts {\n  provider = "kokoro"\n}`);
+    expect(loadConfig(defaults)).toMatchObject({
       kokoroUrl: "http://localhost:8880/v1/audio/speech",
       kokoroModel: "kokoro",
       kokoroVoice: "af_heart",
     });
-    rmSync(directory, { recursive: true, force: true });
   });
 
-  it("selects Groq independently with hosted defaults and a file key", () => {
-    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
-    const path = join(directory, "config.json");
-    writeFileSync(path, JSON.stringify({
+  it("selects Groq with hosted defaults and rejects every non-official URL", () => {
+    const ok = writeConf(`
+      stt {
+        provider = "groq"
+        groq {
+          apiKey = "groq-key"
+        }
+      }
+      tts {
+        provider = "kokoro"
+      }
+    `);
+    expect(loadConfig(ok)).toMatchObject({
       sttProvider: "groq",
       sttApiKey: "groq-key",
-      ttsProvider: "kokoro",
-      ttsApiKey: "must-not-be-used",
-    }));
-
-    expect(loadConfig(path)).toMatchObject({
-      sttProvider: "groq",
-      ttsProvider: "kokoro",
-      sttApiKey: "groq-key",
-      ttsApiKey: undefined,
       whisperUrl: "https://api.groq.com/openai/v1/audio/transcriptions",
       whisperModel: "whisper-large-v3-turbo",
-      whisperLanguage: "en",
-      kokoroUrl: "http://localhost:8880/v1/audio/speech",
     });
-    rmSync(directory, { recursive: true, force: true });
-  });
 
-  it("requires a Groq key and rejects every non-official transcription URL", () => {
-    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
-    const path = join(directory, "config.json");
-
-    writeFileSync(path, JSON.stringify({ sttProvider: "groq", ttsProvider: "local" }));
-    expect(() => loadConfig(path)).toThrow(/sttApiKey.*groq/);
-
-    for (const whisperUrl of [
+    for (const url of [
       "http://api.groq.com/openai/v1/audio/transcriptions",
       "https://api.groq.com.evil.example/openai/v1/audio/transcriptions",
       "https://api.groq.com/openai/v1/chat/completions",
     ]) {
-      writeFileSync(path, JSON.stringify({ sttProvider: "groq", sttApiKey: "groq-key", ttsProvider: "local", whisperUrl }));
-      expect(() => loadConfig(path)).toThrow(/whisperUrl.*api\.groq\.com/);
+      const bad = writeConf(`
+        stt {
+          provider = "groq"
+          groq {
+            apiKey = "groq-key"
+            url = "${url}"
+          }
+        }
+      `);
+      expect(() => loadConfig(bad)).toThrow(/whisperUrl.*api\.groq\.com/);
     }
-    rmSync(directory, { recursive: true, force: true });
   });
 
-  it("selects Speaches independently with documented defaults and optional loopback authentication", () => {
-    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
-    const path = join(directory, "config.json");
-
-    writeFileSync(path, JSON.stringify({ sttProvider: "speaches", ttsProvider: "kokoro" }));
-    expect(loadConfig(path)).toMatchObject({
+  it("selects Speaches with documented defaults and loopback-only authentication", () => {
+    const defaults = writeConf(`stt {\n  provider = "speaches"\n}`);
+    expect(loadConfig(defaults)).toMatchObject({
       sttProvider: "speaches",
-      ttsProvider: "kokoro",
-      voiceProvider: "local",
       sttApiKey: undefined,
       whisperUrl: "http://localhost:8000/v1/audio/transcriptions",
       whisperModel: "Systran/faster-distil-whisper-small.en",
-      whisperLanguage: "en",
     });
 
-    writeFileSync(path, JSON.stringify({
-      sttProvider: "speaches",
+    const authed = writeConf(`
+      stt {
+        provider = "speaches"
+        speaches {
+          apiKey = "local-secret"
+          url = "https://127.0.0.1:8443/v1/audio/transcriptions"
+          prompt = "Programming terms"
+        }
+      }
+    `);
+    expect(loadConfig(authed)).toMatchObject({
       sttApiKey: "local-secret",
-      ttsProvider: "kokoro",
       whisperUrl: "https://127.0.0.1:8443/v1/audio/transcriptions",
-      whisperModel: "Systran/faster-whisper-small.en",
-      whisperPrompt: "Programming terms",
-    }));
-    expect(loadConfig(path)).toMatchObject({
-      sttProvider: "speaches",
-      sttApiKey: "local-secret",
-      whisperUrl: "https://127.0.0.1:8443/v1/audio/transcriptions",
-      whisperModel: "Systran/faster-whisper-small.en",
       whisperPrompt: "Programming terms",
     });
-    rmSync(directory, { recursive: true, force: true });
+
+    const keyedRemote = writeConf(`
+      stt {
+        provider = "speaches"
+        speaches {
+          apiKey = "local-secret"
+          url = "http://speaches.lan:8000/v1/audio/transcriptions"
+        }
+      }
+    `);
+    expect(() => loadConfig(keyedRemote)).toThrow(/whisperUrl|loopback/);
+
+    const keylessRemote = writeConf(`
+      stt {
+        provider = "speaches"
+        speaches {
+          url = "http://speaches.lan:8000/v1/audio/transcriptions"
+        }
+      }
+    `);
+    expect(loadConfig(keylessRemote).whisperUrl).toBe("http://speaches.lan:8000/v1/audio/transcriptions");
   });
 
-  it("allows keyless custom Speaches endpoints but protects configured credentials", () => {
-    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
-    const path = join(directory, "config.json");
-
-    writeFileSync(path, JSON.stringify({
-      sttProvider: "speaches",
-      ttsProvider: "local",
-      whisperUrl: "http://speaches.lan:8000/v1/audio/transcriptions",
-    }));
-    expect(loadConfig(path).whisperUrl).toBe("http://speaches.lan:8000/v1/audio/transcriptions");
-
-    for (const whisperUrl of [
-      "http://speaches.lan:8000/v1/audio/transcriptions",
-      "http://localhost:8000/not-transcription",
-      "http://user:password@localhost:8000/v1/audio/transcriptions",
-    ]) {
-      writeFileSync(path, JSON.stringify({
-        sttProvider: "speaches",
-        sttApiKey: "local-secret",
-        ttsProvider: "local",
-        whisperUrl,
-      }));
-      expect(() => loadConfig(path)).toThrow(/whisperUrl|loopback/);
-    }
-    rmSync(directory, { recursive: true, force: true });
-  });
-
-  it("selects Speaches Kokoro ONNX independently with documented defaults and optional loopback authentication", () => {
-    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
-    const path = join(directory, "config.json");
-
-    writeFileSync(path, JSON.stringify({ sttProvider: "whisper.cpp", ttsProvider: "speaches-kokoro" }));
-    expect(loadConfig(path)).toMatchObject({
-      sttProvider: "whisper.cpp",
+  it("selects Speaches Kokoro ONNX with defaults, loopback auth, and a tighter speed range", () => {
+    const defaults = writeConf(`tts {\n  provider = "speaches-kokoro"\n}`);
+    expect(loadConfig(defaults)).toMatchObject({
       ttsProvider: "speaches-kokoro",
-      voiceProvider: "local",
       ttsApiKey: undefined,
       kokoroUrl: "http://localhost:8000/v1/audio/speech",
       kokoroModel: "speaches-ai/Kokoro-82M-v1.0-ONNX",
       kokoroVoice: "af_heart",
-      ttsSpeed: 1.25,
     });
 
-    writeFileSync(path, JSON.stringify({
-      sttProvider: "whisper.cpp",
-      ttsProvider: "speaches-kokoro",
-      ttsApiKey: "local-secret",
-      kokoroUrl: "https://127.0.0.1:8443/v1/audio/speech",
-      kokoroModel: "example/custom-kokoro-onnx",
-      kokoroVoice: "af_sky",
-      ttsSpeed: 1.5,
-    }));
-    expect(loadConfig(path)).toMatchObject({
-      ttsProvider: "speaches-kokoro",
-      ttsApiKey: "local-secret",
-      kokoroUrl: "https://127.0.0.1:8443/v1/audio/speech",
-      kokoroModel: "example/custom-kokoro-onnx",
-      kokoroVoice: "af_sky",
-      ttsSpeed: 1.5,
-    });
-    rmSync(directory, { recursive: true, force: true });
+    const tooFast = writeConf(`tts {\n  provider = "speaches-kokoro"\n  speed = 2.1\n}`);
+    expect(() => loadConfig(tooFast)).toThrow(/ttsSpeed.*0\.5.*2/);
+
+    const keyedRemote = writeConf(`
+      tts {
+        provider = "speaches-kokoro"
+        speaches-kokoro {
+          apiKey = "local-secret"
+          url = "http://speaches.lan:8000/v1/audio/speech"
+        }
+      }
+    `);
+    expect(() => loadConfig(keyedRemote)).toThrow(/kokoroUrl|loopback/);
   });
 
-  it("allows keyless custom Speaches speech endpoints but protects configured credentials", () => {
-    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
-    const path = join(directory, "config.json");
-
-    writeFileSync(path, JSON.stringify({
-      sttProvider: "whisper.cpp",
-      ttsProvider: "speaches-kokoro",
-      kokoroUrl: "http://speaches.lan:8000/v1/audio/speech",
-    }));
-    expect(loadConfig(path).kokoroUrl).toBe("http://speaches.lan:8000/v1/audio/speech");
-
-    for (const kokoroUrl of [
-      "http://speaches.lan:8000/v1/audio/speech",
-      "http://localhost:8000/not-speech",
-      "http://user:password@localhost:8000/v1/audio/speech",
-    ]) {
-      writeFileSync(path, JSON.stringify({
-        sttProvider: "whisper.cpp",
-        ttsProvider: "speaches-kokoro",
-        ttsApiKey: "local-secret",
-        kokoroUrl,
-      }));
-      expect(() => loadConfig(path)).toThrow(/kokoroUrl|loopback/);
-    }
-
-    writeFileSync(path, JSON.stringify({
-      sttProvider: "whisper.cpp",
-      ttsProvider: "speaches-kokoro",
-      ttsSpeed: 2.1,
-    }));
-    expect(() => loadConfig(path)).toThrow(/ttsSpeed.*0\.5.*2/);
-    rmSync(directory, { recursive: true, force: true });
-  });
-
-  it("selects Speaches Piper independently with verified US English defaults", () => {
-    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
-    const path = join(directory, "config.json");
-
-    writeFileSync(path, JSON.stringify({ sttProvider: "whisper.cpp", ttsProvider: "piper" }));
-    expect(loadConfig(path)).toMatchObject({
-      sttProvider: "whisper.cpp",
+  it("selects Speaches Piper with verified US English defaults", () => {
+    const defaults = writeConf(`
+      stt {
+        provider = "whisper.cpp"
+      }
+      tts {
+        provider = "piper"
+      }
+    `);
+    expect(loadConfig(defaults)).toMatchObject({
       ttsProvider: "piper",
-      voiceProvider: "local",
       ttsApiKey: undefined,
       kokoroUrl: "http://localhost:8000/v1/audio/speech",
       kokoroModel: "speaches-ai/piper-en_US-lessac-medium",
       kokoroVoice: "lessac",
-      ttsSpeed: 1.25,
     });
 
-    writeFileSync(path, JSON.stringify({
-      sttProvider: "whisper.cpp",
-      ttsProvider: "piper",
-      ttsApiKey: "local-secret",
-      kokoroUrl: "https://127.0.0.1:8443/v1/audio/speech",
+    const custom = writeConf(`
+      tts {
+        provider = "piper"
+        piper {
+          model = "speaches-ai/piper-en_US-ryan-high"
+          voice = "ryan"
+        }
+      }
+    `);
+    expect(loadConfig(custom)).toMatchObject({
       kokoroModel: "speaches-ai/piper-en_US-ryan-high",
       kokoroVoice: "ryan",
-      ttsSpeed: 1.5,
-    }));
-    expect(loadConfig(path)).toMatchObject({
-      ttsProvider: "piper",
-      ttsApiKey: "local-secret",
-      kokoroUrl: "https://127.0.0.1:8443/v1/audio/speech",
-      kokoroModel: "speaches-ai/piper-en_US-ryan-high",
-      kokoroVoice: "ryan",
-      ttsSpeed: 1.5,
     });
-    rmSync(directory, { recursive: true, force: true });
   });
 
-  it("allows keyless custom Piper endpoints but protects configured credentials", () => {
-    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
-    const path = join(directory, "config.json");
-
-    writeFileSync(path, JSON.stringify({
-      sttProvider: "whisper.cpp",
-      ttsProvider: "piper",
-      kokoroUrl: "http://speaches.lan:8000/v1/audio/speech",
-    }));
-    expect(loadConfig(path).kokoroUrl).toBe("http://speaches.lan:8000/v1/audio/speech");
-
-    for (const kokoroUrl of [
-      "http://speaches.lan:8000/v1/audio/speech",
-      "http://localhost:8000/not-speech",
-      "http://user:password@localhost:8000/v1/audio/speech",
-    ]) {
-      writeFileSync(path, JSON.stringify({
-        sttProvider: "whisper.cpp",
-        ttsProvider: "piper",
-        ttsApiKey: "local-secret",
-        kokoroUrl,
-      }));
-      expect(() => loadConfig(path)).toThrow(/kokoroUrl|loopback/);
-    }
-    rmSync(directory, { recursive: true, force: true });
-  });
-
-  it("selects official Pocket TTS with safe local defaults", () => {
-    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
-    const path = join(directory, "config.json");
-
-    writeFileSync(path, JSON.stringify({ sttProvider: "whisper.cpp", ttsProvider: "pocket-tts" }));
-    expect(loadConfig(path)).toMatchObject({
-      sttProvider: "whisper.cpp",
+  it("selects official Pocket TTS and restricts it to its unauthenticated loopback API", () => {
+    const defaults = writeConf(`tts {\n  provider = "pocket-tts"\n}`);
+    expect(loadConfig(defaults)).toMatchObject({
       ttsProvider: "pocket-tts",
-      voiceProvider: "local",
       ttsApiKey: undefined,
       kokoroUrl: "http://localhost:8000/tts",
       kokoroModel: "pocket-tts",
       kokoroVoice: "alba",
     });
 
-    writeFileSync(path, JSON.stringify({
-      sttProvider: "whisper.cpp",
-      ttsProvider: "pocket-tts",
-      kokoroUrl: "https://127.0.0.1:8443/tts",
-      kokoroVoice: "anna",
-    }));
-    expect(loadConfig(path)).toMatchObject({
-      ttsProvider: "pocket-tts",
-      kokoroUrl: "https://127.0.0.1:8443/tts",
-      kokoroVoice: "anna",
-    });
-    rmSync(directory, { recursive: true, force: true });
-  });
-
-  it("restricts Pocket TTS to its unauthenticated loopback API", () => {
-    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
-    const path = join(directory, "config.json");
-
-    for (const kokoroUrl of [
+    for (const url of [
       "http://pocket.lan:8000/tts",
       "http://localhost:8000/not-tts",
-      "http://user:password@localhost:8000/tts",
       "http://localhost:8000/tts?voice=alba",
     ]) {
-      writeFileSync(path, JSON.stringify({
-        sttProvider: "whisper.cpp",
-        ttsProvider: "pocket-tts",
-        kokoroUrl,
-      }));
-      expect(() => loadConfig(path)).toThrow(/loopback.*\/tts/);
+      const bad = writeConf(`
+        tts {
+          provider = "pocket-tts"
+          pocket-tts {
+            url = "${url}"
+          }
+        }
+      `);
+      expect(() => loadConfig(bad)).toThrow(/loopback.*\/tts/);
     }
 
-    writeFileSync(path, JSON.stringify({
-      sttProvider: "whisper.cpp",
-      ttsProvider: "pocket-tts",
-      ttsApiKey: "unsupported-secret",
-    }));
-    expect(() => loadConfig(path)).toThrow(/ttsApiKey.*unsupported.*official server/i);
-    rmSync(directory, { recursive: true, force: true });
+    const keyed = writeConf(`
+      tts {
+        provider = "pocket-tts"
+        pocket-tts {
+          apiKey = "unsupported"
+        }
+      }
+    `);
+    expect(() => loadConfig(keyed)).toThrow(/ttsApiKey.*unsupported.*official server/i);
   });
 
-  it("selects whisper.cpp explicitly with local defaults and no API key", () => {
-    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
-    const path = join(directory, "config.json");
-    writeFileSync(path, JSON.stringify({
+  it("selects whisper.cpp with local defaults and never sends a key", () => {
+    const custom = writeConf(`
+      stt {
+        provider = "whisper.cpp"
+        whisper.cpp {
+          model = "small.en-q5_0"
+          prompt = "Software development vocabulary"
+        }
+      }
+      tts {
+        provider = "local"
+      }
+    `);
+    expect(loadConfig(custom)).toMatchObject({
       sttProvider: "whisper.cpp",
-      sttApiKey: "must-not-be-used",
-      ttsProvider: "local",
-      whisperModel: "small.en-q5_0",
-      whisperLanguage: "en",
-      whisperPrompt: "Software development vocabulary",
-    }));
-
-    expect(loadConfig(path)).toMatchObject({
-      sttProvider: "whisper.cpp",
-      ttsProvider: "local",
-      voiceProvider: "local",
       sttApiKey: undefined,
       whisperUrl: "http://localhost:2022/v1/audio/transcriptions",
       whisperModel: "small.en-q5_0",
-      whisperLanguage: "en",
       whisperPrompt: "Software development vocabulary",
     });
 
-    writeFileSync(path, JSON.stringify({ sttProvider: "whisper.cpp", ttsProvider: "local" }));
-    expect(loadConfig(path).whisperModel).toBe("base.en");
-    rmSync(directory, { recursive: true, force: true });
+    const defaults = writeConf(`stt {\n  provider = "whisper.cpp"\n}`);
+    expect(loadConfig(defaults).whisperModel).toBe("base.en");
   });
 
   it("selects Moonshine with a persistent local sidecar and documented defaults", () => {
-    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
-    const path = join(directory, "config.json");
-    writeFileSync(path, JSON.stringify({
+    const custom = writeConf(`
+      stt {
+        provider = "moonshine"
+      }
+      tts {
+        provider = "pocket-tts"
+      }
+      moonshine {
+        pythonCommand = "/opt/moonshine/bin/python"
+        sidecarPath = "/opt/converse/moonshine-sidecar.py"
+        language = "es"
+        model = "medium-streaming"
+      }
+    `);
+    expect(loadConfig(custom)).toMatchObject({
       sttProvider: "moonshine",
       ttsProvider: "pocket-tts",
-      moonshinePythonCommand: "/opt/moonshine/bin/python",
-      moonshineSidecarPath: "/opt/converse/moonshine-sidecar.py",
-      moonshineLanguage: "es",
-      moonshineModel: "medium-streaming",
-    }));
-
-    expect(loadConfig(path)).toMatchObject({
-      sttProvider: "moonshine",
-      ttsProvider: "pocket-tts",
-      voiceProvider: "local",
       sttApiKey: undefined,
       moonshinePythonCommand: "/opt/moonshine/bin/python",
       moonshineSidecarPath: "/opt/converse/moonshine-sidecar.py",
@@ -617,56 +426,312 @@ describe("loadConfig", () => {
       moonshineModel: "medium-streaming",
     });
 
-    writeFileSync(path, JSON.stringify({ sttProvider: "moonshine", ttsProvider: "kokoro" }));
-    expect(loadConfig(path)).toMatchObject({
+    const defaults = writeConf(`stt {\n  provider = "moonshine"\n}`);
+    const config = loadConfig(defaults);
+    expect(config).toMatchObject({
       moonshinePythonCommand: "python3",
       moonshineLanguage: "en",
       moonshineModel: "small-streaming",
     });
-    expect(loadConfig(path).moonshineSidecarPath).toMatch(/services\/moonshine-sidecar\.py$/);
-    rmSync(directory, { recursive: true, force: true });
+    expect(config.moonshineSidecarPath).toMatch(/services\/moonshine-sidecar\.py$/);
   });
 
-  it("validates Moonshine-only settings and rejects credentials or resolved prompts", () => {
-    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
-    const path = join(directory, "config.json");
-    for (const invalid of [
-      { moonshineLanguage: "fr" },
-      { moonshineModel: "large" },
-      { moonshinePythonCommand: "" },
-      { moonshineSidecarPath: "" },
-      { sttApiKey: "not-used" },
-      { whisperPrompt: "unsupported priming" },
-    ]) {
-      writeFileSync(path, JSON.stringify({ sttProvider: "moonshine", ttsProvider: "local", ...invalid }));
-      expect(() => loadConfig(path)).toThrow(/moonshine|Moonshine|sttApiKey|whisperPrompt/);
-    }
+  it("rejects Moonshine credentials, primed prompts, and invalid languages or models", () => {
+    const withKey = writeConf(`
+      stt {
+        provider = "moonshine"
+        apiKey = "not-used"
+      }
+    `);
+    expect(() => loadConfig(withKey)).toThrow(/sttApiKey.*moonshine/);
 
-    writeFileSync(path, JSON.stringify({ sttProvider: "moonshine", ttsProvider: "local" }));
-    process.env.WHISPER_INITIAL_PROMPT = "inherited but unsupported";
-    expect(() => loadConfig(path)).toThrow(/whisperPrompt.*moonshine/);
-    rmSync(directory, { recursive: true, force: true });
+    const withPrompt = writeConf(`
+      stt {
+        provider = "moonshine"
+        prompt = "unsupported priming"
+      }
+    `);
+    expect(() => loadConfig(withPrompt)).toThrow(/whisperPrompt.*moonshine/);
+
+    const badLanguage = writeConf(`
+      stt {
+        provider = "moonshine"
+      }
+      moonshine {
+        language = "fr"
+      }
+    `);
+    expect(() => loadConfig(badLanguage)).toThrow(/moonshine.*language|moonshineLanguage/i);
+
+    const badModel = writeConf(`
+      stt {
+        provider = "moonshine"
+      }
+      moonshine {
+        model = "large"
+      }
+    `);
+    expect(() => loadConfig(badModel)).toThrow(/moonshine.*model|moonshineModel/i);
   });
 
-  it("reports malformed, unknown, and incorrectly typed file settings", () => {
-    const directory = mkdtempSync(join(tmpdir(), "claude-converse-config-"));
-    const path = join(directory, "config.json");
-
-    writeFileSync(path, "{");
-    expect(() => loadConfig(path)).toThrow(/Invalid JSON.*config\.json/);
-    writeFileSync(path, JSON.stringify({ typoSetting: true }));
-    expect(() => loadConfig(path)).toThrow(/Unknown.*typoSetting/);
-    writeFileSync(path, JSON.stringify({ port: "45839" }));
-    expect(() => loadConfig(path)).toThrow(/port.*must be number/);
-    rmSync(directory, { recursive: true, force: true });
+  it("applies the selected provider's sub-block and ignores the others", () => {
+    const path = writeConf(`
+      stt {
+        provider = "groq"
+        groq {
+          apiKey = "gsk-block-key"
+          prompt = "code terms"
+        }
+        openai {
+          apiKey = "sk-should-be-ignored"
+        }
+      }
+      tts {
+        provider = "kokoro"
+        kokoro {
+          voice = "af_sky"
+        }
+        openai {
+          apiKey = "sk-should-be-ignored"
+          voice = "alloy"
+        }
+      }
+    `);
+    expect(loadConfig(path)).toMatchObject({
+      sttProvider: "groq",
+      sttApiKey: "gsk-block-key",
+      whisperPrompt: "code terms",
+      whisperUrl: "https://api.groq.com/openai/v1/audio/transcriptions",
+      ttsProvider: "kokoro",
+      ttsApiKey: undefined,
+      kokoroVoice: "af_sky",
+    });
   });
 
-  it("uses the XDG configuration directory by default", () => {
+  it("recombines the dotted whisper.cpp sub-block key the HOCON parser splits", () => {
+    const path = writeConf(`
+      stt {
+        provider = "whisper.cpp"
+        whisper.cpp {
+          model = "small.en-q5_0"
+        }
+        groq {
+          apiKey = "gsk-inert"
+        }
+      }
+      tts {
+        provider = "kokoro"
+      }
+    `);
+    expect(loadConfig(path)).toMatchObject({
+      sttProvider: "whisper.cpp",
+      whisperModel: "small.en-q5_0",
+      sttApiKey: undefined,
+    });
+  });
+
+  it("lets a provider sub-block override a section-level setting for that provider", () => {
+    const path = writeConf(`
+      stt {
+        provider = "speaches"
+        model = "section-level-model"
+        speaches {
+          model = "block-level-model"
+        }
+      }
+      tts {
+        provider = "kokoro"
+      }
+    `);
+    expect(loadConfig(path).whisperModel).toBe("block-level-model");
+  });
+
+  it("reports unknown and mistyped fields inside a provider sub-block", () => {
+    const unknown = writeConf(`
+      stt {
+        provider = "groq"
+        groq {
+          mystery = true
+        }
+      }
+    `);
+    expect(() => loadConfig(unknown)).toThrow(/Unknown.*stt\.groq\.mystery/);
+
+    const mistyped = writeConf(`
+      tts {
+        provider = "openai"
+        openai {
+          speed = "fast"
+        }
+      }
+    `);
+    expect(() => loadConfig(mistyped)).toThrow(/tts\.openai\.speed.*number/);
+  });
+
+  it("loads grouped HOCON settings and maps every section", () => {
+    const path = writeConf(`
+      stt {
+        provider = "speaches"
+        apiKey = "stt-key"
+        url = "http://localhost:8000/v1/audio/transcriptions"
+        model = "custom-stt"
+        language = "en"
+        prompt = "code"
+      }
+      tts {
+        provider = "piper"
+        apiKey = "tts-key"
+        url = "http://localhost:8000/v1/audio/speech"
+        model = "custom-piper"
+        voice = "lessac"
+        speed = 1.4
+      }
+      moonshine {
+        pythonCommand = "python3.12"
+        sidecarPath = "/tmp/sidecar.py"
+        language = "es"
+        model = "base-streaming"
+      }
+      audio {
+        sampleRate = 48000
+        channels = 1
+        bytesPerSample = 2
+        frameDurationMs = 20
+        recorder {
+          command = "arecord"
+          device = "hw:1"
+          additionalArgs = ["--quiet"]
+        }
+        player {
+          command = "aplay"
+          additionalArgs = ["--quiet"]
+        }
+      }
+      vad {
+        threshold = 400
+        speechStartFrames = 4
+        chunkSilenceFrames = 21
+        utteranceEndFrames = 61
+        minUtteranceFrames = 11
+        bargeInEnergyMultiplier = 2.5
+        bargeInFrames = 7
+        preBufferFrames = 12
+      }
+      status {
+        recentMaxEntries = 60
+        windowSeconds = 45
+        prefix = "mic "
+        separator = " / "
+      }
+      server {
+        host = "127.0.0.2"
+        port = 45840
+      }
+      runtime {
+        apiTimeoutMs = 70000
+        voiceWaitMs = 6000
+      }
+    `);
+
+    expect(loadConfig(path)).toMatchObject({
+      sttProvider: "speaches",
+      sttApiKey: "stt-key",
+      whisperUrl: "http://localhost:8000/v1/audio/transcriptions",
+      whisperModel: "custom-stt",
+      whisperLanguage: "en",
+      whisperPrompt: "code",
+      ttsProvider: "piper",
+      ttsApiKey: "tts-key",
+      kokoroUrl: "http://localhost:8000/v1/audio/speech",
+      kokoroModel: "custom-piper",
+      kokoroVoice: "lessac",
+      ttsSpeed: 1.4,
+      moonshinePythonCommand: "python3.12",
+      moonshineSidecarPath: "/tmp/sidecar.py",
+      moonshineLanguage: "es",
+      moonshineModel: "base-streaming",
+      sampleRate: 48000,
+      channels: 1,
+      bytesPerSample: 2,
+      frameDurationMs: 20,
+      recorderCommand: "arecord",
+      recorderDevice: "hw:1",
+      recorderAdditionalArgs: ["--quiet"],
+      playerCommand: "aplay",
+      playerAdditionalArgs: ["--quiet"],
+      vadThreshold: 400,
+      vadSpeechStartFrames: 4,
+      vadChunkSilenceFrames: 21,
+      vadUtteranceEndFrames: 61,
+      vadMinUtteranceFrames: 11,
+      vadBargeInEnergyMultiplier: 2.5,
+      vadBargeInFrames: 7,
+      vadPreBufferFrames: 12,
+      recentMaxEntries: 60,
+      statusWindowSeconds: 45,
+      statusPrefix: "mic ",
+      statusSeparator: " / ",
+      host: "127.0.0.2",
+      port: 45840,
+      apiTimeoutMs: 70000,
+      voiceWaitMs: 6000,
+    });
+  });
+
+  it("reports malformed, unknown, and incorrectly typed HOCON settings", () => {
+    const providerType = writeConf(`stt {\n  provider = 42\n}`);
+    expect(() => loadConfig(providerType)).toThrow(/stt\.provider.*stt-provider/);
+
+    const unknownNested = writeConf(`tts {\n  mystery = true\n}`);
+    expect(() => loadConfig(unknownNested)).toThrow(/Unknown.*tts\.mystery/);
+
+    const unknownTop = writeConf(`typoSetting = true`);
+    expect(() => loadConfig(unknownTop)).toThrow(/Unknown.*typoSetting/);
+
+    const scalarSection = writeConf(`stt = openai`);
+    expect(() => loadConfig(scalarSection)).toThrow(/stt.*must be an object/);
+
+    const wrongType = writeConf(`server {\n  port = "45839"\n}`);
+    expect(() => loadConfig(wrongType)).toThrow(/port.*must be number/);
+
+    const unbalanced = writeConf(`stt {`);
+    expect(() => loadConfig(unbalanced)).toThrow(/Invalid HOCON/);
+  });
+
+  it("parses the shipped reference config with its default providers", () => {
+    const config = loadConfig(join(process.cwd(), "config.example.conf"));
+    expect(config).toMatchObject({
+      sttProvider: "whisper.cpp",
+      whisperModel: "base.en",
+      ttsProvider: "kokoro",
+      kokoroVoice: "af_heart",
+    });
+  });
+
+  it("copies the reference config to a missing default path, privately", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-xdg-"));
+    dirs.push(directory);
     const original = process.env.XDG_CONFIG_HOME;
-    process.env.XDG_CONFIG_HOME = "/tmp/test-xdg";
-    expect(defaultConfigPath()).toBe("/tmp/test-xdg/claude-converse/config.json");
-    if (original === undefined) delete process.env.XDG_CONFIG_HOME;
-    else process.env.XDG_CONFIG_HOME = original;
+    process.env.XDG_CONFIG_HOME = directory;
+    try {
+      const path = defaultConfigPath();
+      expect(path).toBe(join(directory, "claude-converse", "config.conf"));
+      expect(existsSync(path)).toBe(false);
+      expect(loadConfig()).toMatchObject({ sttProvider: "whisper.cpp", ttsProvider: "kokoro" });
+      expect(readFileSync(path, "utf8")).toBe(referenceConfig());
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+      expect(() => loadConfig()).not.toThrow();
+    } finally {
+      if (original === undefined) delete process.env.XDG_CONFIG_HOME;
+      else process.env.XDG_CONFIG_HOME = original;
+    }
   });
 
+  it("does not create an explicitly requested missing config", () => {
+    const directory = mkdtempSync(join(tmpdir(), "claude-converse-explicit-"));
+    dirs.push(directory);
+    const path = join(directory, "nested", "config.conf");
+    expect(loadConfig(path).port).toBe(45839);
+    expect(existsSync(join(directory, "nested"))).toBe(false);
+  });
 });

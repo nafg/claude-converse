@@ -1,23 +1,31 @@
-import { chmodSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import conversePiExtension, { sttBackendLabel } from "./index.js";
 
-const envNames = [
-  "CONVERSE_PORT",
-  "CONVERSE_RECORDER_COMMAND",
-  "CONVERSE_VOICE_PROVIDER",
-  "OPENAI_API_KEY",
-] as const;
-const originalEnv = new Map(envNames.map((name) => [name, process.env[name]]));
+const originalXdg = process.env.XDG_CONFIG_HOME;
+let configHome: string | undefined;
+
+// Point the extension's loadConfig() at a throwaway config that binds an
+// ephemeral port and a harmless fake recorder, keeping the test isolated.
+const stubConfig = (recorderCommand: string): void => {
+  configHome = mkdtempSync(join(tmpdir(), "converse-pi-xdg-"));
+  mkdirSync(join(configHome, "claude-converse"), { recursive: true });
+  writeFileSync(
+    join(configHome, "claude-converse", "config.conf"),
+    `server {\n  port = 0\n}\naudio {\n  recorder {\n    command = "${recorderCommand}"\n  }\n}\n`,
+  );
+  process.env.XDG_CONFIG_HOME = configHome;
+};
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  for (const name of envNames) {
-    const value = originalEnv.get(name);
-    if (value === undefined) delete process.env[name];
-    else process.env[name] = value;
+  if (originalXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = originalXdg;
+  if (configHome) {
+    rmSync(configHome, { recursive: true, force: true });
+    configHome = undefined;
   }
 });
 
@@ -30,10 +38,7 @@ describe("Pi converse extension", () => {
     const recorderCommand = join(tmpdir(), `converse-test-recorder-${process.pid}`);
     writeFileSync(recorderCommand, "#!/bin/sh\nexec sleep 60\n");
     chmodSync(recorderCommand, 0o755);
-    process.env.CONVERSE_PORT = "0";
-    process.env.CONVERSE_RECORDER_COMMAND = recorderCommand;
-    process.env.CONVERSE_VOICE_PROVIDER = "openai";
-    process.env.OPENAI_API_KEY = "test-key";
+    stubConfig(recorderCommand);
 
     const handlers = new Map<string, Array<(event: unknown, ctx: unknown) => unknown>>();
     let converseCommand: { handler(args: string, ctx: unknown): Promise<void> } | undefined;

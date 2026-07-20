@@ -13,6 +13,8 @@ The old Python split (`listener.py`, `speak.py`, `render_status.py`, shell + loc
 - one energy-based VAD state machine
 - harness-specific transport/adapters only where needed
 
+Both harnesses load `~/.config/claude-converse/config.conf` (under `XDG_CONFIG_HOME` when set). On first load Converse copies the committed reference `config.example.conf` there (mode 0600). The HOCON config file is the only source of settings — there are no environment-variable overrides. Restart Claude `/converse` or run Pi `/reload` after editing.
+
 ## Claude transport
 
 Claude keeps the same high-level harness affordances:

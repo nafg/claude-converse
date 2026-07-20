@@ -28,7 +28,7 @@ const required = [
   "LICENSE",
   "README.md",
   ...readdirSync(new URL("../", import.meta.url))
-    .filter((path) => /^config(?:\..+)?\.json$/.test(path)),
+    .filter((path) => /^config(?:\..+)?\.conf$/.test(path)),
 ];
 
 const allowed = (path) =>
@@ -37,7 +37,7 @@ const allowed = (path) =>
   || path === "CLAUDE.md"
   || path === "LICENSE"
   || path === "README.md"
-  || /^config(?:\..+)?\.json$/.test(path)
+  || /^config(?:\..+)?\.conf$/.test(path)
   || path.startsWith(".claude-plugin/")
   || path.startsWith("dist/")
   || path === "hooks/hooks.json"

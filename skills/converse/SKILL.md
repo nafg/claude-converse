@@ -46,7 +46,7 @@ node "${CLAUDE_PLUGIN_ROOT}/dist/claude/shutdown.js" __CLAUDE_SESSION_ID__
 ## Notes
 
 - Linux only
-- Requires `parecord` and `paplay` (or configured compatible commands), plus the STT/TTS services or local packages selected in `~/.config/claude-converse/config.json`
+- Requires `parecord` and `paplay` (or configured compatible commands), plus the STT/TTS services or local packages selected in `~/.config/claude-converse/config.conf`; Converse creates a private commented starter on first use
 - Supported choices include local whisper.cpp, Moonshine Voice, Speaches, Kokoro, Piper, and Pocket TTS, or hosted OpenAI/Groq combinations; see the README for setup
 - Audio defaults to the OS-selected input/output devices through PulseAudio/PipeWire.
 - Only one active converse owner may exist at a time; startup fails if the port is already in use

@@ -21,10 +21,8 @@ const openAiConfig = () => ({
   ...loadConfig(),
   sttProvider: "openai" as const,
   ttsProvider: "openai" as const,
-  voiceProvider: "openai" as const,
   sttApiKey: "stt-key",
   ttsApiKey: "tts-key",
-  apiKey: undefined,
 });
 
 const serviceWithKey = (): ServiceInternals => {
@@ -36,7 +34,6 @@ const whisperCppConfig = () => ({
   ...openAiConfig(),
   sttProvider: "whisper.cpp" as const,
   ttsProvider: "local" as const,
-  voiceProvider: "local" as const,
   sttApiKey: undefined,
   ttsApiKey: undefined,
   whisperUrl: "http://localhost:2022/v1/audio/transcriptions",

@@ -1,7 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseString } from "hocon-config";
 
 export interface ConverseConfig {
   sampleRate: number;
@@ -24,10 +25,6 @@ export interface ConverseConfig {
   ttsProvider: TtsProvider;
   sttApiKey?: string;
   ttsApiKey?: string;
-  /** Compatibility summary for callers that used the formerly coupled provider. */
-  voiceProvider: "local" | "openai" | "mixed";
-  /** Compatibility key populated only when both sides use the same OpenAI key. */
-  apiKey?: string;
   apiTimeoutMs: number;
   whisperUrl: string;
   whisperModel: string;
@@ -55,12 +52,18 @@ export type SttProvider = "local" | "moonshine" | "openai" | "groq" | "speaches"
 export type TtsProvider = "local" | "openai" | "kokoro" | "piper" | "pocket-tts" | "speaches-kokoro";
 export type MoonshineLanguage = "ar" | "en" | "es" | "ja" | "ko" | "uk" | "vi" | "zh";
 export type MoonshineModel = "tiny" | "base" | "tiny-streaming" | "base-streaming" | "small-streaming" | "medium-streaming";
-type LegacyAudioProvider = "local" | "openai";
-type FileConfig = Partial<Omit<ConverseConfig, "voiceProvider" | "apiKey">> & {
-  voiceProvider?: LegacyAudioProvider;
-  apiKey?: string;
-};
-type ValueKind = "number" | "string" | "string[]" | "stt-provider" | "tts-provider" | "legacy-provider" | "moonshine-language" | "moonshine-model";
+type FileConfig = Partial<ConverseConfig>;
+type ValueKind = "number" | "string" | "string[]" | "stt-provider" | "tts-provider" | "moonshine-language" | "moonshine-model";
+type FileConfigKey = keyof FileConfig;
+type HoconSchema = { [key: string]: FileConfigKey | HoconSchema };
+type ProviderFieldSchema = Record<string, FileConfigKey>;
+/** Per-provider sub-block overrides keyed by provider id, merged only for the selected provider. */
+type ProviderBlocks = Partial<Record<string, Partial<FileConfig>>>;
+interface ParsedFile {
+  values: FileConfig;
+  sttBlocks: ProviderBlocks;
+  ttsBlocks: ProviderBlocks;
+}
 
 const fileConfigKinds: Record<keyof ConverseConfig, ValueKind> = {
   sampleRate: "number",
@@ -83,8 +86,6 @@ const fileConfigKinds: Record<keyof ConverseConfig, ValueKind> = {
   ttsProvider: "tts-provider",
   sttApiKey: "string",
   ttsApiKey: "string",
-  voiceProvider: "legacy-provider",
-  apiKey: "string",
   apiTimeoutMs: "number",
   whisperUrl: "string",
   whisperModel: "string",
@@ -108,92 +109,273 @@ const fileConfigKinds: Record<keyof ConverseConfig, ValueKind> = {
   port: "number",
 };
 
-export const defaultConfigPath = (): string =>
-  join(process.env.XDG_CONFIG_HOME?.trim() || join(homedir(), ".config"), "claude-converse", "config.json");
+// Fields valid inside `stt { ... }` and each `stt.<provider> { ... }` sub-block.
+const sttFieldSchema: ProviderFieldSchema = {
+  apiKey: "sttApiKey",
+  url: "whisperUrl",
+  model: "whisperModel",
+  language: "whisperLanguage",
+  prompt: "whisperPrompt",
+};
+// Fields valid inside `tts { ... }` and each `tts.<provider> { ... }` sub-block.
+const ttsFieldSchema: ProviderFieldSchema = {
+  apiKey: "ttsApiKey",
+  url: "kokoroUrl",
+  model: "kokoroModel",
+  voice: "kokoroVoice",
+  speed: "ttsSpeed",
+};
+// Providers that accept an `stt.<provider>` / `tts.<provider>` override block.
+// Moonshine is excluded: its settings live in the dedicated top-level `moonshine { }` section.
+const sttBlockProviders: readonly SttProvider[] = ["local", "openai", "groq", "speaches", "whisper.cpp"];
+const ttsBlockProviders: readonly TtsProvider[] = ["local", "openai", "kokoro", "piper", "pocket-tts", "speaches-kokoro"];
 
-const readFileConfig = (path: string): FileConfig => {
+// Sections other than stt/tts, which are handled by resolveProviderSection.
+const topSchema: HoconSchema = {
+  moonshine: {
+    pythonCommand: "moonshinePythonCommand",
+    sidecarPath: "moonshineSidecarPath",
+    language: "moonshineLanguage",
+    model: "moonshineModel",
+  },
+  audio: {
+    sampleRate: "sampleRate",
+    channels: "channels",
+    bytesPerSample: "bytesPerSample",
+    frameDurationMs: "frameDurationMs",
+    recorder: {
+      command: "recorderCommand",
+      device: "recorderDevice",
+      additionalArgs: "recorderAdditionalArgs",
+    },
+    player: {
+      command: "playerCommand",
+      additionalArgs: "playerAdditionalArgs",
+    },
+  },
+  vad: {
+    threshold: "vadThreshold",
+    speechStartFrames: "vadSpeechStartFrames",
+    chunkSilenceFrames: "vadChunkSilenceFrames",
+    utteranceEndFrames: "vadUtteranceEndFrames",
+    minUtteranceFrames: "vadMinUtteranceFrames",
+    bargeInEnergyMultiplier: "vadBargeInEnergyMultiplier",
+    bargeInFrames: "vadBargeInFrames",
+    preBufferFrames: "vadPreBufferFrames",
+  },
+  status: {
+    recentMaxEntries: "recentMaxEntries",
+    windowSeconds: "statusWindowSeconds",
+    prefix: "statusPrefix",
+    separator: "statusSeparator",
+  },
+  server: {
+    host: "host",
+    port: "port",
+  },
+  runtime: {
+    apiTimeoutMs: "apiTimeoutMs",
+    voiceWaitMs: "voiceWaitMs",
+  },
+};
+
+// The committed, shipped reference config that first-run copies to the user's
+// config directory. Resolves next to this module in dist/ and from source.
+export const resolveReferenceConfigPath = (moduleUrl = import.meta.url): string => {
+  const candidates = [
+    new URL("../../config.example.conf", moduleUrl),
+    new URL("../config.example.conf", moduleUrl),
+  ];
+  const match = candidates.find((candidate) => existsSync(candidate));
+  return fileURLToPath(match ?? candidates[0]!);
+};
+
+const configDirectory = (): string =>
+  join(process.env.XDG_CONFIG_HOME?.trim() || join(homedir(), ".config"), "claude-converse");
+
+export const defaultConfigPath = (): string => join(configDirectory(), "config.conf");
+
+const ensureDefaultConfig = (): string => {
+  const hoconPath = defaultConfigPath();
+  if (existsSync(hoconPath)) return hoconPath;
+
+  try {
+    mkdirSync(dirname(hoconPath), { recursive: true, mode: 0o700 });
+    const reference = readFileSync(resolveReferenceConfigPath(), "utf8");
+    writeFileSync(hoconPath, reference, { encoding: "utf8", flag: "wx", mode: 0o600 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      throw new Error(`Cannot create Converse config ${hoconPath}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return hoconPath;
+};
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+const valueMatchesKind = (item: unknown, kind: ValueKind): boolean => kind === "string[]"
+  ? Array.isArray(item) && item.every((entry) => typeof entry === "string")
+  : kind === "stt-provider"
+    ? item === "local" || item === "moonshine" || item === "openai" || item === "groq" || item === "speaches" || item === "whisper.cpp"
+    : kind === "moonshine-language"
+      ? item === "ar" || item === "en" || item === "es" || item === "ja" || item === "ko" || item === "uk" || item === "vi" || item === "zh"
+      : kind === "moonshine-model"
+        ? item === "tiny" || item === "base" || item === "tiny-streaming" || item === "base-streaming" || item === "small-streaming" || item === "medium-streaming"
+        : kind === "tts-provider"
+          ? item === "local" || item === "openai" || item === "kokoro" || item === "piper" || item === "pocket-tts" || item === "speaches-kokoro"
+          : typeof item === kind && (kind !== "number" || Number.isFinite(item));
+
+const validateSetting = (key: FileConfigKey, item: unknown, displayPath: string, path: string): void => {
+  const kind = fileConfigKinds[key as keyof ConverseConfig];
+  if (!kind || !valueMatchesKind(item, kind)) {
+    throw new Error(`Converse config setting ${displayPath} in ${path} must be ${kind ?? "supported"}`);
+  }
+};
+
+// The HOCON parser splits unquoted-and-quoted keys on periods, so `whisper.cpp` arrives
+// nested as { whisper: { cpp: {...} } }. Recombine it back into the "whisper.cpp" provider id.
+const recombineWhisperCpp = (input: Record<string, unknown>): Record<string, unknown> => {
+  const nested = input.whisper;
+  if (isObject(nested) && isObject(nested.cpp)) {
+    const { whisper: _removed, ...rest } = input;
+    return { ...rest, "whisper.cpp": nested.cpp };
+  }
+  return input;
+};
+
+const resolveProviderBlock = (item: unknown, fields: ProviderFieldSchema, displayPath: string, path: string): Partial<FileConfig> => {
+  if (!isObject(item)) throw new Error(`Converse config setting ${displayPath} in ${path} must be an object`);
+  const block: Partial<Record<FileConfigKey, unknown>> = {};
+  for (const [name, value] of Object.entries(item)) {
+    const target = fields[name];
+    if (!target) throw new Error(`Unknown Converse config setting ${displayPath}.${name} in ${path}`);
+    validateSetting(target, value, `${displayPath}.${name}`, path);
+    block[target] = value;
+  }
+  return block as Partial<FileConfig>;
+};
+
+const resolveProviderSection = (
+  raw: unknown,
+  section: "stt" | "tts",
+  fields: ProviderFieldSchema,
+  providerKey: FileConfigKey,
+  blockProviders: readonly string[],
+  values: Partial<Record<FileConfigKey, unknown>>,
+  path: string,
+): ProviderBlocks => {
+  if (!isObject(raw)) throw new Error(`Converse config setting ${section} in ${path} must be an object`);
+  const input = section === "stt" ? recombineWhisperCpp(raw) : raw;
+  const blocks: ProviderBlocks = {};
+  for (const [name, item] of Object.entries(input)) {
+    const displayPath = `${section}.${name}`;
+    if (name === "provider") {
+      validateSetting(providerKey, item, displayPath, path);
+      values[providerKey] = item;
+    } else if (name in fields) {
+      const target = fields[name]!;
+      validateSetting(target, item, displayPath, path);
+      values[target] = item;
+    } else if (blockProviders.includes(name)) {
+      blocks[name] = resolveProviderBlock(item, fields, displayPath, path);
+    } else {
+      throw new Error(`Unknown Converse config setting ${displayPath} in ${path}`);
+    }
+  }
+  return blocks;
+};
+
+const normalizeHocon = (value: unknown, path: string): ParsedFile => {
+  if (!isObject(value)) throw new Error(`Converse config ${path} must contain a HOCON object`);
+  const values: Partial<Record<FileConfigKey, unknown>> = {};
+  let sttBlocks: ProviderBlocks = {};
+  let ttsBlocks: ProviderBlocks = {};
+
+  const visit = (input: Record<string, unknown>, schema: HoconSchema, prefix: string): void => {
+    for (const [name, item] of Object.entries(input)) {
+      const displayPath = prefix ? `${prefix}.${name}` : name;
+      const target = schema[name];
+      if (!target) throw new Error(`Unknown Converse config setting ${displayPath} in ${path}`);
+      if (typeof target === "string") {
+        validateSetting(target, item, displayPath, path);
+        values[target] = item;
+      } else {
+        if (!isObject(item)) throw new Error(`Converse config setting ${displayPath} in ${path} must be an object`);
+        visit(item, target, displayPath);
+      }
+    }
+  };
+
+  for (const [name, item] of Object.entries(value)) {
+    if (name === "stt") {
+      sttBlocks = resolveProviderSection(item, "stt", sttFieldSchema, "sttProvider", sttBlockProviders, values, path);
+    } else if (name === "tts") {
+      ttsBlocks = resolveProviderSection(item, "tts", ttsFieldSchema, "ttsProvider", ttsBlockProviders, values, path);
+    } else {
+      const target = topSchema[name];
+      if (!target) throw new Error(`Unknown Converse config setting ${name} in ${path}`);
+      if (typeof target === "string") {
+        validateSetting(target, item, name, path);
+        values[target] = item;
+      } else {
+        if (!isObject(item)) throw new Error(`Converse config setting ${name} in ${path} must be an object`);
+        visit(item, target, name);
+      }
+    }
+  }
+
+  return { values: values as FileConfig, sttBlocks, ttsBlocks };
+};
+
+const assertBalancedHocon = (source: string, path: string): void => {
+  const stack: string[] = [];
+  let quoted = false;
+  let escaped = false;
+  let lineComment = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index]!;
+    const next = source[index + 1];
+    if (lineComment) {
+      if (character === "\n") lineComment = false;
+      continue;
+    }
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') quoted = false;
+      continue;
+    }
+    if (character === '"') quoted = true;
+    else if (character === "#" || (character === "/" && next === "/")) lineComment = true;
+    else if (character === "{" || character === "[") stack.push(character);
+    else if (character === "}" || character === "]") {
+      const opening = stack.pop();
+      if ((character === "}" && opening !== "{") || (character === "]" && opening !== "[")) {
+        throw new Error(`Invalid HOCON in Converse config ${path}: mismatched ${character}`);
+      }
+    }
+  }
+  if (quoted || stack.length > 0) throw new Error(`Invalid HOCON in Converse config ${path}: unclosed string or collection`);
+};
+
+const readFileConfig = (path: string): ParsedFile => {
   let source: string;
   try {
     source = readFileSync(path, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { values: {}, sttBlocks: {}, ttsBlocks: {} };
     throw new Error(`Cannot read Converse config ${path}: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  let value: unknown;
   try {
-    value = JSON.parse(source);
+    assertBalancedHocon(source, path);
+    return normalizeHocon(parseString(source, dirname(path), { overrides: {} }), path);
   } catch (error) {
-    throw new Error(`Invalid JSON in Converse config ${path}: ${error instanceof Error ? error.message : String(error)}`);
+    if (error instanceof Error && error.message.includes("Converse config")) throw error;
+    throw new Error(`Invalid HOCON in Converse config ${path}: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Converse config ${path} must contain a JSON object`);
-  }
-
-  const config = value as Record<string, unknown>;
-  for (const [key, item] of Object.entries(config)) {
-    const kind = fileConfigKinds[key as keyof ConverseConfig];
-    if (!kind) throw new Error(`Unknown Converse config setting ${key} in ${path}`);
-    const valid = kind === "string[]"
-      ? Array.isArray(item) && item.every((entry) => typeof entry === "string")
-      : kind === "stt-provider"
-        ? item === "local" || item === "moonshine" || item === "openai" || item === "groq" || item === "speaches" || item === "whisper.cpp"
-        : kind === "moonshine-language"
-          ? item === "ar" || item === "en" || item === "es" || item === "ja" || item === "ko" || item === "uk" || item === "vi" || item === "zh"
-          : kind === "moonshine-model"
-            ? item === "tiny" || item === "base" || item === "tiny-streaming" || item === "base-streaming" || item === "small-streaming" || item === "medium-streaming"
-        : kind === "tts-provider"
-          ? item === "local" || item === "openai" || item === "kokoro" || item === "piper" || item === "pocket-tts" || item === "speaches-kokoro"
-          : kind === "legacy-provider"
-            ? item === "local" || item === "openai"
-            : typeof item === kind && (kind !== "number" || Number.isFinite(item));
-    if (!valid) throw new Error(`Converse config setting ${key} in ${path} must be ${kind}`);
-  }
-  return config as FileConfig;
 };
-
-const intEnv = (name: string, fallback: number): number => {
-  const value = process.env[name];
-  if (!value) return fallback;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
-};
-
-const floatEnv = (name: string, fallback: number): number => {
-  const value = process.env[name];
-  if (!value) return fallback;
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-};
-
-const stringListEnv = (name: string): string[] => {
-  const value = process.env[name]?.trim();
-  return value ? value.split(/\s+/g) : [];
-};
-
-const legacyProviderEnv = (name: string): LegacyAudioProvider | undefined => {
-  const configured = process.env[name]?.trim().toLowerCase();
-  if (!configured) return undefined;
-  if (configured === "local" || configured === "openai") return configured;
-  throw new Error(`${name}=${configured} is unsupported; use local or openai`);
-};
-
-const sttProviderEnv = (): SttProvider | undefined => {
-  const configured = process.env.CONVERSE_STT_PROVIDER?.trim().toLowerCase();
-  if (!configured) return undefined;
-  if (configured === "local" || configured === "moonshine" || configured === "openai" || configured === "groq" || configured === "speaches" || configured === "whisper.cpp") return configured;
-  throw new Error(`CONVERSE_STT_PROVIDER=${configured} is unsupported; use local, whisper.cpp, moonshine, speaches, groq, or openai`);
-};
-
-const ttsProviderEnv = (): TtsProvider | undefined => {
-  const configured = process.env.CONVERSE_TTS_PROVIDER?.trim().toLowerCase();
-  if (!configured) return undefined;
-  if (configured === "local" || configured === "openai" || configured === "kokoro" || configured === "piper" || configured === "pocket-tts" || configured === "speaches-kokoro") return configured;
-  throw new Error(`CONVERSE_TTS_PROVIDER=${configured} is unsupported; use local, kokoro, piper, pocket-tts, speaches-kokoro, or openai`);
-};
-
-const legacyVoiceProvider = (): LegacyAudioProvider =>
-  legacyProviderEnv("CONVERSE_VOICE_PROVIDER") ?? (process.env.OPENAI_API_KEY?.trim() ? "openai" : "local");
 
 const isOpenAiUrl = (value: string): boolean => {
   try {
@@ -257,35 +439,34 @@ export const resolveMoonshineSidecarPath = (moduleUrl = import.meta.url): string
   return fileURLToPath(match ?? candidates[0]!);
 };
 
-export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
-  const file = readFileConfig(path);
-  const environmentProvider = legacyVoiceProvider();
-  const sttProvider = file.sttProvider ?? file.voiceProvider ?? sttProviderEnv() ?? environmentProvider;
-  const ttsProvider = file.ttsProvider ?? file.voiceProvider ?? ttsProviderEnv() ?? environmentProvider;
-  const environmentApiKey = process.env.OPENAI_API_KEY?.trim();
-  const sttApiKey = sttProvider === "openai"
-    ? file.sttApiKey ?? file.apiKey ?? process.env.OPENAI_STT_API_KEY?.trim() ?? environmentApiKey
-    : sttProvider === "groq" || sttProvider === "speaches"
-      ? file.sttApiKey
-      : undefined;
-  const ttsApiKey = ttsProvider === "openai"
-    ? file.ttsApiKey ?? file.apiKey ?? process.env.OPENAI_TTS_API_KEY?.trim() ?? environmentApiKey
-    : ttsProvider === "speaches-kokoro" || ttsProvider === "piper"
-      ? file.ttsApiKey
-      : undefined;
-  const bytesPerSample = file.bytesPerSample ?? intEnv("CONVERSE_BYTES_PER_SAMPLE", 2);
-  const apiTimeoutMs = file.apiTimeoutMs ?? intEnv("CONVERSE_API_TIMEOUT_MS", 60_000);
-  const ttsSpeed = file.ttsSpeed ?? floatEnv("CONVERSE_TTS_SPEED", 1.25);
-  const voiceWaitMs = file.voiceWaitMs ?? intEnv("CONVERSE_VOICE_WAIT_MS", 5_000);
-  const whisperPrompt = file.whisperPrompt ?? process.env.WHISPER_INITIAL_PROMPT ?? "";
-  const whisperUrl = file.whisperUrl ?? process.env.WHISPER_URL ?? (sttProvider === "openai"
+export const loadConfig = (path?: string): ConverseConfig => {
+  const resolvedPath = path ?? ensureDefaultConfig();
+  const { values: file, sttBlocks, ttsBlocks } = readFileConfig(resolvedPath);
+  const sttProvider = file.sttProvider ?? "whisper.cpp";
+  const ttsProvider = file.ttsProvider ?? "kokoro";
+  // Overlay the selected provider's sub-block over the section-level file settings.
+  const stt = { ...file, ...sttBlocks[sttProvider] };
+  const tts = { ...file, ...ttsBlocks[ttsProvider] };
+
+  const sttApiKey = sttProvider === "openai" || sttProvider === "groq" || sttProvider === "speaches"
+    ? stt.sttApiKey
+    : undefined;
+  const ttsApiKey = ttsProvider === "openai" || ttsProvider === "speaches-kokoro" || ttsProvider === "piper"
+    ? tts.ttsApiKey
+    : undefined;
+  const bytesPerSample = file.bytesPerSample ?? 2;
+  const apiTimeoutMs = file.apiTimeoutMs ?? 60_000;
+  const ttsSpeed = tts.ttsSpeed ?? 1.25;
+  const voiceWaitMs = file.voiceWaitMs ?? 5_000;
+  const whisperPrompt = stt.whisperPrompt ?? "";
+  const whisperUrl = stt.whisperUrl ?? (sttProvider === "openai"
     ? "https://api.openai.com/v1/audio/transcriptions"
     : sttProvider === "groq"
       ? "https://api.groq.com/openai/v1/audio/transcriptions"
       : sttProvider === "speaches"
         ? "http://localhost:8000/v1/audio/transcriptions"
         : "http://localhost:2022/v1/audio/transcriptions");
-  const kokoroUrl = file.kokoroUrl ?? process.env.KOKORO_URL ?? (ttsProvider === "openai"
+  const kokoroUrl = tts.kokoroUrl ?? (ttsProvider === "openai"
     ? "https://api.openai.com/v1/audio/speech"
     : ttsProvider === "speaches-kokoro" || ttsProvider === "piper"
       ? "http://localhost:8000/v1/audio/speech"
@@ -294,7 +475,7 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
         : "http://localhost:8880/v1/audio/speech");
 
   if (bytesPerSample !== 2) throw new Error(`bytesPerSample=${bytesPerSample} is unsupported; only 2-byte S16_LE audio is supported`);
-  if (sttProvider === "moonshine" && file.sttApiKey !== undefined) {
+  if (sttProvider === "moonshine" && stt.sttApiKey !== undefined) {
     throw new Error("sttApiKey is unsupported when sttProvider is moonshine; Moonshine runs as a local child process");
   }
   if (sttProvider === "moonshine" && whisperPrompt.trim()) {
@@ -307,10 +488,10 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
     throw new Error("moonshineSidecarPath must not be empty");
   }
   if ((sttProvider === "openai" || sttProvider === "groq") && !sttApiKey) {
-    throw new Error(`sttApiKey must be set in ${path} when sttProvider is ${sttProvider}`);
+    throw new Error(`sttApiKey must be set in ${resolvedPath} when sttProvider is ${sttProvider}`);
   }
-  if (ttsProvider === "openai" && !ttsApiKey) throw new Error(`ttsApiKey must be set in ${path} when ttsProvider is openai`);
-  if (ttsProvider === "pocket-tts" && file.ttsApiKey !== undefined) {
+  if (ttsProvider === "openai" && !ttsApiKey) throw new Error(`ttsApiKey must be set in ${resolvedPath} when ttsProvider is openai`);
+  if (ttsProvider === "pocket-tts" && tts.ttsApiKey !== undefined) {
     throw new Error("ttsApiKey is unsupported when ttsProvider is pocket-tts; the official server has no authentication");
   }
   if (apiTimeoutMs <= 0) throw new Error("apiTimeoutMs must be a positive number");
@@ -347,39 +528,30 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
     throw new Error("kokoroUrl must be a loopback HTTP(S) /tts URL without credentials, query, or fragment when ttsProvider is pocket-tts");
   }
 
-  const voiceProvider = sttProvider === "openai" && ttsProvider === "openai"
-    ? "openai"
-    : sttProvider !== "openai" && ttsProvider !== "openai"
-      ? "local"
-      : "mixed";
-  const apiKey = sttProvider === "openai" && ttsProvider === "openai" && sttApiKey === ttsApiKey ? sttApiKey : undefined;
-
   return {
-    sampleRate: file.sampleRate ?? intEnv("CONVERSE_SAMPLE_RATE", 16_000),
-    channels: file.channels ?? intEnv("CONVERSE_CHANNELS", 1),
+    sampleRate: file.sampleRate ?? 16_000,
+    channels: file.channels ?? 1,
     bytesPerSample,
-    frameDurationMs: file.frameDurationMs ?? intEnv("CONVERSE_FRAME_DURATION_MS", 30),
-    vadThreshold: file.vadThreshold ?? intEnv("VAD_THRESHOLD", 300),
-    vadSpeechStartFrames: file.vadSpeechStartFrames ?? intEnv("VAD_SPEECH_START_FRAMES", 3),
-    vadChunkSilenceFrames: file.vadChunkSilenceFrames ?? intEnv("VAD_CHUNK_SILENCE_FRAMES", 20),
-    vadUtteranceEndFrames: file.vadUtteranceEndFrames ?? intEnv("VAD_UTTERANCE_END_FRAMES", 60),
-    vadMinUtteranceFrames: file.vadMinUtteranceFrames ?? intEnv("VAD_MIN_UTTERANCE_FRAMES", 10),
-    vadBargeInEnergyMultiplier: file.vadBargeInEnergyMultiplier ?? floatEnv("VAD_BARGE_IN_ENERGY_MULT", 2.0),
-    vadBargeInFrames: file.vadBargeInFrames ?? intEnv("VAD_BARGE_IN_FRAMES", 6),
-    vadPreBufferFrames: file.vadPreBufferFrames ?? intEnv("VAD_PRE_BUFFER_FRAMES", 10),
-    recentMaxEntries: file.recentMaxEntries ?? intEnv("RECENT_MAX_ENTRIES", 50),
-    statusWindowSeconds: file.statusWindowSeconds ?? intEnv("CONVERSE_STATUS_WINDOW", 30),
-    statusPrefix: file.statusPrefix ?? process.env.CONVERSE_STATUS_PREFIX ?? "🎤 ",
-    statusSeparator: file.statusSeparator ?? process.env.CONVERSE_STATUS_SEPARATOR ?? " | ",
+    frameDurationMs: file.frameDurationMs ?? 30,
+    vadThreshold: file.vadThreshold ?? 300,
+    vadSpeechStartFrames: file.vadSpeechStartFrames ?? 3,
+    vadChunkSilenceFrames: file.vadChunkSilenceFrames ?? 20,
+    vadUtteranceEndFrames: file.vadUtteranceEndFrames ?? 60,
+    vadMinUtteranceFrames: file.vadMinUtteranceFrames ?? 10,
+    vadBargeInEnergyMultiplier: file.vadBargeInEnergyMultiplier ?? 2.0,
+    vadBargeInFrames: file.vadBargeInFrames ?? 6,
+    vadPreBufferFrames: file.vadPreBufferFrames ?? 10,
+    recentMaxEntries: file.recentMaxEntries ?? 50,
+    statusWindowSeconds: file.statusWindowSeconds ?? 30,
+    statusPrefix: file.statusPrefix ?? "🎤 ",
+    statusSeparator: file.statusSeparator ?? " | ",
     sttProvider,
     ttsProvider,
     sttApiKey,
     ttsApiKey,
-    voiceProvider,
-    apiKey,
     apiTimeoutMs,
     whisperUrl,
-    whisperModel: file.whisperModel ?? process.env.WHISPER_MODEL ?? (sttProvider === "openai"
+    whisperModel: stt.whisperModel ?? (sttProvider === "openai"
       ? "gpt-4o-transcribe"
       : sttProvider === "groq"
         ? "whisper-large-v3-turbo"
@@ -388,21 +560,21 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
           : sttProvider === "whisper.cpp"
             ? "base.en"
             : "base"),
-    whisperLanguage: file.whisperLanguage ?? process.env.WHISPER_LANGUAGE ?? "en",
+    whisperLanguage: stt.whisperLanguage ?? "en",
     whisperPrompt,
     moonshinePythonCommand: file.moonshinePythonCommand ?? "python3",
     moonshineSidecarPath: file.moonshineSidecarPath ?? resolveMoonshineSidecarPath(),
     moonshineLanguage: file.moonshineLanguage ?? "en",
     moonshineModel: file.moonshineModel ?? "small-streaming",
     kokoroUrl,
-    kokoroVoice: file.kokoroVoice ?? process.env.CONVERSE_TTS_VOICE ?? process.env.KOKORO_VOICE ?? (ttsProvider === "openai"
+    kokoroVoice: tts.kokoroVoice ?? (ttsProvider === "openai"
       ? "alloy"
       : ttsProvider === "piper"
         ? "lessac"
         : ttsProvider === "pocket-tts"
           ? "alba"
           : "af_heart"),
-    kokoroModel: file.kokoroModel ?? process.env.KOKORO_MODEL ?? (ttsProvider === "openai"
+    kokoroModel: tts.kokoroModel ?? (ttsProvider === "openai"
       ? "gpt-4o-mini-tts"
       : ttsProvider === "speaches-kokoro"
         ? "speaches-ai/Kokoro-82M-v1.0-ONNX"
@@ -413,12 +585,12 @@ export const loadConfig = (path = defaultConfigPath()): ConverseConfig => {
             : "kokoro"),
     ttsSpeed,
     voiceWaitMs,
-    recorderCommand: file.recorderCommand ?? process.env.CONVERSE_RECORDER_COMMAND ?? "parecord",
-    recorderDevice: file.recorderDevice ?? process.env.CONVERSE_RECORDER_DEVICE ?? "default",
-    recorderAdditionalArgs: file.recorderAdditionalArgs ?? stringListEnv("CONVERSE_RECORDER_ARGS"),
-    playerCommand: file.playerCommand ?? process.env.CONVERSE_PLAYER_COMMAND ?? "paplay",
-    playerAdditionalArgs: file.playerAdditionalArgs ?? stringListEnv("CONVERSE_PLAYER_ARGS"),
-    host: file.host ?? process.env.CONVERSE_HOST ?? "127.0.0.1",
-    port: file.port ?? intEnv("CONVERSE_PORT", 45839),
+    recorderCommand: file.recorderCommand ?? "parecord",
+    recorderDevice: file.recorderDevice ?? "default",
+    recorderAdditionalArgs: file.recorderAdditionalArgs ?? [],
+    playerCommand: file.playerCommand ?? "paplay",
+    playerAdditionalArgs: file.playerAdditionalArgs ?? [],
+    host: file.host ?? "127.0.0.1",
+    port: file.port ?? 45839,
   };
 };

@@ -11,6 +11,9 @@ __pycache__/
 *.log
 tts.pid
 
+# Live/local config copy; the committed reference is config.example.conf
+config.conf
+
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
