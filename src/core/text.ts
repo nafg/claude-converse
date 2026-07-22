@@ -6,16 +6,55 @@ const PARAGRAPH_PAUSE = 0.45;
 
 const ABBREVS = /\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|vs|etc|approx|dept|est|govt|e\.g|i\.e|a\.m|p\.m|U\.S|Inc|Ltd|Co|Corp|Gen|Gov|Sgt|Pvt|Capt|Lt|Cmdr|Adm|Rev|Hon|Pres|Vol|No)\.$/i;
 
+// Strip a leading `[transcribed]…[/transcribed]` (or legacy `[heard]…[/heard]`)
+// echo wrapper so it is not spoken. Handles both an inline wrapper and one whose
+// tags sit on their own lines. Fails open: if there is no well-formed leading
+// wrapper, the text is returned unchanged.
 export const stripEchoPrefix = (text: string): string => {
-  const lines = text.split("\n");
-  const opener = lines[0];
-  if (opener !== "[transcribed]" && opener !== "[heard]") return text;
+  const rest = text.replace(/^\s+/, "");
+  const opener = rest.startsWith("[transcribed]")
+    ? "[transcribed]"
+    : rest.startsWith("[heard]")
+      ? "[heard]"
+      : undefined;
+  if (!opener) return text;
   const closer = opener === "[transcribed]" ? "[/transcribed]" : "[/heard]";
-  const end = lines.indexOf(closer, 1);
+  const end = rest.indexOf(closer, opener.length);
   if (end === -1) return text;
-  let i = end + 1;
-  while (i < lines.length && lines[i]?.trim() === "") i += 1;
-  return lines.slice(i).join("\n");
+  return rest.slice(end + closer.length).replace(/^\s+/, "");
+};
+
+// Break text into lines no longer than maxWidth, on word boundaries where
+// possible. Used to keep long lines under a line-based consumer's truncation
+// limit (Claude's Monitor clips long lines).
+export const wrapLines = (text: string, maxWidth: number): string[] => {
+  const wrapped: string[] = [];
+  for (const rawLine of text.split("\n")) {
+    if (rawLine.length <= maxWidth) {
+      wrapped.push(rawLine);
+      continue;
+    }
+    let current = "";
+    for (const word of rawLine.split(" ")) {
+      if (word.length > maxWidth) {
+        if (current) {
+          wrapped.push(current);
+          current = "";
+        }
+        for (let i = 0; i < word.length; i += maxWidth) wrapped.push(word.slice(i, i + maxWidth));
+        continue;
+      }
+      const candidate = current ? `${current} ${word}` : word;
+      if (candidate.length > maxWidth) {
+        wrapped.push(current);
+        current = word;
+      } else {
+        current = candidate;
+      }
+    }
+    if (current) wrapped.push(current);
+  }
+  return wrapped;
 };
 
 export const stripMarkdown = (text: string): string => {

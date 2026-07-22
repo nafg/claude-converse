@@ -3,6 +3,11 @@ import http from "node:http";
 import process from "node:process";
 import { loadConfig } from "../core/config.js";
 import { ConverseService } from "../core/service.js";
+import { wrapLines } from "../core/text.js";
+
+// Claude's Monitor clips long lines with a "(truncated)" marker, so emit each
+// final transcript pre-wrapped into lines short enough to survive intact.
+const MONITOR_LINE_WIDTH = 400;
 
 const argv = new Map<string, string>();
 for (const arg of process.argv.slice(2)) {
@@ -27,7 +32,10 @@ const readBody = async (request: http.IncomingMessage): Promise<string> => {
 };
 
 service.on("final-transcript", (entry) => {
-  for (const response of finalSubscribers) response.write(entry.text + "\n");
+  const lines = wrapLines(entry.text, MONITOR_LINE_WIDTH);
+  for (const response of finalSubscribers) {
+    for (const line of lines) response.write(`${line}\n`);
+  }
 });
 service.on("error", (error) => console.error(error));
 

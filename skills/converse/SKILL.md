@@ -30,7 +30,7 @@ curl -NsS "http://${CONVERSE_HOST:-127.0.0.1}:${CONVERSE_PORT:-45839}/v1/transcr
 3. Follow the same voice protocol as before:
    - accumulate fragments before responding
    - keep spoken responses concise
-   - if you echo the transcription, use a leading `[transcribed] ... [/transcribed]` block so the TTS path can strip it before speech
+   - if you echo back what you heard, wrap that echo in a `[transcribed]...[/transcribed]` marker at the very start of your reply (inline or on its own lines); the TTS path strips this leading marker so it is not spoken
 
 ## When invoked with "off"
 
