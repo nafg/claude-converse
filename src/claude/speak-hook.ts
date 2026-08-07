@@ -33,6 +33,7 @@ try {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ owner_id: ownerId, text }),
+    signal: AbortSignal.timeout(config.apiTimeoutMs),
   });
 } catch {
   // Voice mode is off or the daemon is not ours.

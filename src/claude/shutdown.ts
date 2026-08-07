@@ -11,6 +11,7 @@ try {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ owner_id: ownerId }),
+    signal: AbortSignal.timeout(config.apiTimeoutMs),
   });
   process.exit(response.ok ? 0 : 1);
 } catch {
