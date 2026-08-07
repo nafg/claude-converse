@@ -1,0 +1,99 @@
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import conversePiExtension, { sttBackendLabel } from "./index.js";
+
+const originalXdg = process.env.XDG_CONFIG_HOME;
+let configHome: string | undefined;
+
+// Point the extension's loadConfig() at a throwaway config that binds an
+// ephemeral port and a harmless fake recorder, keeping the test isolated.
+const stubConfig = (recorderCommand: string): void => {
+  configHome = mkdtempSync(join(tmpdir(), "converse-pi-xdg-"));
+  mkdirSync(join(configHome, "claude-converse"), { recursive: true });
+  writeFileSync(
+    join(configHome, "claude-converse", "config.conf"),
+    `server {\n  port = 0\n}\naudio {\n  recorder {\n    command = "${recorderCommand}"\n  }\n}\n`,
+  );
+  process.env.XDG_CONFIG_HOME = configHome;
+};
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  if (originalXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = originalXdg;
+  if (configHome) {
+    rmSync(configHome, { recursive: true, force: true });
+    configHome = undefined;
+  }
+});
+
+describe("Pi converse extension", () => {
+  it("labels Moonshine explicitly in voice-mode status", () => {
+    expect(sttBackendLabel("moonshine")).toBe("Moonshine");
+  });
+
+  it("does not await speech playback from message_end", async () => {
+    const recorderCommand = join(tmpdir(), `converse-test-recorder-${process.pid}`);
+    writeFileSync(recorderCommand, "#!/bin/sh\nexec sleep 60\n");
+    chmodSync(recorderCommand, 0o755);
+    stubConfig(recorderCommand);
+
+    const handlers = new Map<string, Array<(event: unknown, ctx: unknown) => unknown>>();
+    let converseCommand: { handler(args: string, ctx: unknown): Promise<void> } | undefined;
+    let waitTool: { name: string; promptGuidelines?: string[] } | undefined;
+    const pi = {
+      on(name: string, handler: (event: unknown, ctx: unknown) => unknown) {
+        const current = handlers.get(name) ?? [];
+        current.push(handler);
+        handlers.set(name, current);
+      },
+      registerCommand(name: string, command: typeof converseCommand) {
+        if (name === "converse") converseCommand = command;
+      },
+      registerTool(tool: typeof waitTool) {
+        if (tool?.name === "wait_for_voice") waitTool = tool;
+      },
+      sendUserMessage: vi.fn(),
+    };
+    const ui = {
+      notify: vi.fn(),
+      setStatus: vi.fn(),
+      setWidget: vi.fn(),
+      theme: { fg: (_color: string, text: string) => text },
+    };
+    const ctx = {
+      hasUI: false,
+      isIdle: () => true,
+      sessionManager: { getSessionFile: () => "test-session" },
+      ui,
+    };
+
+    let requestSignal: AbortSignal | undefined;
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      requestSignal = init.signal as AbortSignal;
+      return new Promise<Response>((_resolve, reject) => {
+        requestSignal?.addEventListener("abort", () => reject(requestSignal?.reason), { once: true });
+      });
+    }));
+
+    try {
+      conversePiExtension(pi as never);
+      expect(waitTool?.promptGuidelines?.join(" ")).toMatch(/do not tell the user that you are waiting/i);
+      await converseCommand!.handler("on", ctx);
+      const messageEnd = handlers.get("message_end")![0]!;
+      let settled = false;
+      const result = Promise.resolve(messageEnd({ message: { role: "assistant", content: "Long reply." } }, ctx))
+        .then(() => { settled = true; });
+      await vi.waitFor(() => expect(requestSignal).toBeDefined());
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(settled).toBe(true);
+      await Promise.resolve(handlers.get("session_shutdown")![0]!({}, ctx));
+      await result;
+    } finally {
+      rmSync(recorderCommand, { force: true });
+    }
+  });
+});

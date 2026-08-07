@@ -1,0 +1,48 @@
+{
+  "sttProvider": "whisper.cpp",
+  "ttsProvider": "kokoro",
+  "apiTimeoutMs": 60000,
+
+  "whisperUrl": "http://localhost:2022/v1/audio/transcriptions",
+  "whisperModel": "base.en",
+  "whisperLanguage": "en",
+  "whisperPrompt": "",
+
+  "moonshinePythonCommand": "python3",
+  "moonshineLanguage": "en",
+  "moonshineModel": "small-streaming",
+
+  "kokoroUrl": "http://localhost:8880/v1/audio/speech",
+  "kokoroModel": "kokoro",
+  "kokoroVoice": "af_heart",
+  "ttsSpeed": 1.25,
+
+  "sampleRate": 16000,
+  "channels": 1,
+  "bytesPerSample": 2,
+  "frameDurationMs": 30,
+
+  "vadThreshold": 300,
+  "vadSpeechStartFrames": 3,
+  "vadChunkSilenceFrames": 20,
+  "vadUtteranceEndFrames": 60,
+  "vadMinUtteranceFrames": 10,
+  "vadBargeInEnergyMultiplier": 2.0,
+  "vadBargeInFrames": 6,
+  "vadPreBufferFrames": 10,
+
+  "recentMaxEntries": 50,
+  "statusWindowSeconds": 30,
+  "statusPrefix": "🎤 ",
+  "statusSeparator": " | ",
+  "voiceWaitMs": 5000,
+
+  "recorderCommand": "parecord",
+  "recorderDevice": "default",
+  "recorderAdditionalArgs": [],
+  "playerCommand": "paplay",
+  "playerAdditionalArgs": [],
+
+  "host": "127.0.0.1",
+  "port": 45839
+}

@@ -1,5 +1,5 @@
 {
-  "description": "Converse plugin hooks — session ID injection + TTS",
+  "description": "Converse plugin hooks — session id injection + TTS handoff",
   "hooks": {
     "PreToolUse": [
       {
@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/inject-session-id.py"
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/claude/inject-session-id.js"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/speak.py",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/dist/claude/speak-hook.js",
             "async": true
           }
         ]
