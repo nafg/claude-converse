@@ -27,10 +27,21 @@ nohup node "${CLAUDE_PLUGIN_ROOT}/dist/claude/daemon.js" --owner-id=__CLAUDE_SES
 curl -NsS "http://${CONVERSE_HOST:-127.0.0.1}:${CONVERSE_PORT:-45839}/v1/transcriptions/final?owner_id=__CLAUDE_SESSION_ID__"
 ```
 
-3. Follow the same voice protocol as before:
-   - accumulate fragments before responding
-   - keep spoken responses concise
-   - if you echo back what you heard, wrap that echo in a `[transcribed]...[/transcribed]` marker at the very start of your reply (inline or on its own lines); the TTS path strips this leading marker so it is not spoken
+3. Follow the voice protocol for the rest of the session:
+
+   - **Collecting input**: Monitor events are speech transcriptions. Accumulate fragments and wait for a complete thought before responding. Never respond to a single short fragment; treat consecutive events arriving close together as one utterance; fillers and trailing connectors ("um", "so", "and", "but", "like") mean more is coming; only respond to a clear question, request, or complete statement. When in doubt, wait — the user can always prompt again.
+
+   - **Echo transcription**: If you echo back what you heard, wrap the echo between `[transcribed]` and `[/transcribed]` markers at the very start of your reply (inline or on their own lines). Follow these rules strictly:
+
+     1. The block must contain ONLY the transcription of what the user said — never your own commentary, interpretation, or filler.
+     2. Anything you want to say goes AFTER the closing `[/transcribed]` tag; the TTS path strips the leading block and speaks only what follows.
+     3. A block with nothing after it means "partial input, still accumulating — do not speak". Do not add filler like "waiting for more"; just the block.
+     4. The opening `[transcribed]` must be at byte 0 of the message: no leading whitespace, no preamble.
+     5. Use the exact literal markers — no HTML tags, alternative bracket shapes, or variant spellings, or the strip fails and the echo is spoken aloud.
+
+   - **Response style**: Keep spoken responses concise and conversational; the user is listening, not reading. Display detailed analysis as text after the spoken summary.
+
+   - **Barge-in**: If a new transcription arrives while you're responding, playback has already been interrupted — treat it as an interruption and address the new input.
 
 ## When invoked with "off"
 
