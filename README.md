@@ -255,7 +255,7 @@ per-provider `stt` / `tts` blocks above:
 - `audio.sampleRate` `16000`, `audio.channels` `1`, `audio.bytesPerSample` `2` (only `2`/S16_LE is supported), `audio.frameDurationMs` `30`
 - `audio.recorder.command` — default `parecord`; `audio.recorder.device` — default `default` (used by the `arecord` fallback); `audio.recorder.additionalArgs`
 - `audio.player.command` — default `paplay`; `audio.player.additionalArgs`
-- `status.prefix` — default `🎤 `; `status.separator` — default ` | `; `status.windowSeconds` `30`; `status.recentMaxEntries` `50`
+- `status.prefix` — default `🎤 `; `status.separator` — default `" | "`; `status.windowSeconds` `30`; `status.recentMaxEntries` `50`
 - `vad.threshold` `300`, `vad.speechStartFrames` `3`, `vad.chunkSilenceFrames` `20`, `vad.utteranceEndFrames` `60` (~1.8 s at the default frame duration), `vad.minUtteranceFrames` `10`, `vad.bargeInEnergyMultiplier` `2.0`, `vad.bargeInFrames` `6`, `vad.preBufferFrames` `10`
 
 Per-provider defaults for URLs, models, voices, and speeds are described in each provider section above; `tts.speed` accepts `0.25`–`4` (Speaches Kokoro ONNX `0.5`–`2`).
