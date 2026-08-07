@@ -26,6 +26,10 @@ export interface ConverseConfig {
   sttApiKey?: string;
   ttsApiKey?: string;
   apiTimeoutMs: number;
+  sttTimeoutPerAudioSecondMs: number;
+  sttTimeoutCapMs: number;
+  sttEmptyTextRetries: number;
+  sttErrorRetries: number;
   whisperUrl: string;
   whisperModel: string;
   whisperLanguage: string;
@@ -87,6 +91,10 @@ const fileConfigKinds: Record<keyof ConverseConfig, ValueKind> = {
   sttApiKey: "string",
   ttsApiKey: "string",
   apiTimeoutMs: "number",
+  sttTimeoutPerAudioSecondMs: "number",
+  sttTimeoutCapMs: "number",
+  sttEmptyTextRetries: "number",
+  sttErrorRetries: "number",
   whisperUrl: "string",
   whisperModel: "string",
   whisperLanguage: "string",
@@ -116,6 +124,10 @@ const sttFieldSchema: ProviderFieldSchema = {
   model: "whisperModel",
   language: "whisperLanguage",
   prompt: "whisperPrompt",
+  timeoutPerAudioSecondMs: "sttTimeoutPerAudioSecondMs",
+  timeoutCapMs: "sttTimeoutCapMs",
+  emptyTextRetries: "sttEmptyTextRetries",
+  errorRetries: "sttErrorRetries",
 };
 // Fields valid inside `tts { ... }` and each `tts.<provider> { ... }` sub-block.
 const ttsFieldSchema: ProviderFieldSchema = {
@@ -456,6 +468,10 @@ export const loadConfig = (path?: string): ConverseConfig => {
     : undefined;
   const bytesPerSample = file.bytesPerSample ?? 2;
   const apiTimeoutMs = file.apiTimeoutMs ?? 60_000;
+  const sttTimeoutPerAudioSecondMs = stt.sttTimeoutPerAudioSecondMs ?? 4_000;
+  const sttTimeoutCapMs = stt.sttTimeoutCapMs ?? 180_000;
+  const sttEmptyTextRetries = stt.sttEmptyTextRetries ?? 1;
+  const sttErrorRetries = stt.sttErrorRetries ?? 1;
   const ttsSpeed = tts.ttsSpeed ?? 1.25;
   const voiceWaitMs = file.voiceWaitMs ?? 5_000;
   const whisperPrompt = stt.whisperPrompt ?? "";
@@ -501,6 +517,14 @@ export const loadConfig = (path?: string): ConverseConfig => {
     throw new Error("ttsSpeed is unsupported when ttsProvider is pocket-tts; the official /tts API has no speed field");
   }
   if (apiTimeoutMs <= 0) throw new Error("apiTimeoutMs must be a positive number");
+  if (sttTimeoutPerAudioSecondMs < 0) throw new Error("stt.timeoutPerAudioSecondMs must be non-negative");
+  if (sttTimeoutCapMs < apiTimeoutMs) throw new Error("stt.timeoutCapMs must be at least apiTimeoutMs");
+  if (!Number.isInteger(sttEmptyTextRetries) || sttEmptyTextRetries < 0) {
+    throw new Error("stt.emptyTextRetries must be a non-negative integer");
+  }
+  if (!Number.isInteger(sttErrorRetries) || sttErrorRetries < 0) {
+    throw new Error("stt.errorRetries must be a non-negative integer");
+  }
   if (ttsSpeed < 0.25 || ttsSpeed > 4) throw new Error("ttsSpeed must be between 0.25 and 4");
   if (ttsProvider === "speaches-kokoro" && (ttsSpeed < 0.5 || ttsSpeed > 2)) {
     throw new Error("ttsSpeed must be between 0.5 and 2 when ttsProvider is speaches-kokoro");
@@ -556,6 +580,10 @@ export const loadConfig = (path?: string): ConverseConfig => {
     sttApiKey,
     ttsApiKey,
     apiTimeoutMs,
+    sttTimeoutPerAudioSecondMs,
+    sttTimeoutCapMs,
+    sttEmptyTextRetries,
+    sttErrorRetries,
     whisperUrl,
     whisperModel: stt.whisperModel ?? (sttProvider === "openai"
       ? "gpt-4o-transcribe"

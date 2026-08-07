@@ -251,6 +251,7 @@ per-provider `stt` / `tts` blocks above:
 
 - `server.host` — default `127.0.0.1`; `server.port` — default `45839`
 - `runtime.apiTimeoutMs` — per transcription/speech request; default `60000`
+- `stt.timeoutPerAudioSecondMs` `4000` and `stt.timeoutCapMs` `180000` — HTTP transcription timeout scales with utterance length (`apiTimeoutMs` floor); `stt.errorRetries` `1` retries timed-out/failed requests, `stt.emptyTextRetries` `1` retries anomalous empty results on long-enough utterances (both logged, never silent)
 - `runtime.voiceWaitMs` — Pi `wait_for_voice` continuation timeout; default `5000`
 - `audio.sampleRate` `16000`, `audio.channels` `1`, `audio.bytesPerSample` `2` (only `2`/S16_LE is supported), `audio.frameDurationMs` `30`
 - `audio.recorder.command` — default `parecord`; `audio.recorder.device` — default `default` (used by the `arecord` fallback); `audio.recorder.additionalArgs`

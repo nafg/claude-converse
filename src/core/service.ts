@@ -13,7 +13,20 @@ interface ServiceEvents {
   "final-transcript": [TranscriptEntry];
   "barge-in": [];
   error: [Error];
+  diagnostic: [string];
 }
+
+/** Read timeout scaled to audio length: apiTimeoutMs floor, per-audio-second growth, hard cap. */
+export const computeSttTimeoutMs = (
+  audioByteLength: number,
+  config: Pick<ConverseConfig, "sampleRate" | "channels" | "bytesPerSample" | "apiTimeoutMs" | "sttTimeoutPerAudioSecondMs" | "sttTimeoutCapMs">,
+): number => {
+  const seconds = audioByteLength / (config.sampleRate * config.channels * config.bytesPerSample);
+  return Math.min(config.sttTimeoutCapMs, Math.max(config.apiTimeoutMs, Math.ceil(seconds * config.sttTimeoutPerAudioSecondMs)));
+};
+
+const isRetryableSttError = (error: unknown): boolean =>
+  error instanceof DOMException ? error.name === "TimeoutError" : error instanceof TypeError;
 
 export class ConverseService extends EventEmitter<ServiceEvents> {
   private readonly vad: EnergyVad;
@@ -232,7 +245,11 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
     }
     if (emission.type === "speech-start") return;
     const text = await this.transcribe(emission.audio);
-    if (generation !== this.lifecycleGeneration || !text) return;
+    if (generation !== this.lifecycleGeneration) return;
+    if (!text) {
+      this.emit("diagnostic", `[transcription.dropped id=${emission.utteranceId} final=${emission.type === "final"}] empty text, nothing emitted`);
+      return;
+    }
     const entry: TranscriptEntry = {
       id: emission.utteranceId,
       final: emission.type === "final",
@@ -264,6 +281,30 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
     }
 
     const wav = encodeWav(audio, this.config.sampleRate, this.config.channels, this.config.bytesPerSample);
+    const seconds = audio.length / (this.config.sampleRate * this.config.channels * this.config.bytesPerSample);
+    const frames = Math.floor((seconds * 1000) / this.config.frameDurationMs);
+    const timeoutMs = computeSttTimeoutMs(audio.length, this.config);
+    const detail = `bytes=${audio.length} seconds=${seconds.toFixed(1)} frames=${frames} timeout=${timeoutMs}ms`;
+    let errorRetriesLeft = this.config.sttErrorRetries;
+    // Only anomalous empties are retried: a genuinely-silent short segment must not spam retries.
+    let emptyRetriesLeft = frames >= this.config.vadMinUtteranceFrames ? this.config.sttEmptyTextRetries : 0;
+    for (;;) {
+      try {
+        const text = await this.requestTranscription(wav, timeoutMs);
+        if (text) return text;
+        this.emit("diagnostic", `[stt] empty text from 200 response (${detail} retriesLeft=${emptyRetriesLeft})`);
+        if (emptyRetriesLeft <= 0) return "";
+        emptyRetriesLeft -= 1;
+        await sleep(300);
+      } catch (error) {
+        if (!isRetryableSttError(error) || errorRetriesLeft <= 0) throw error;
+        errorRetriesLeft -= 1;
+        this.emit("diagnostic", `[stt] transcription request failed, retrying (${detail}): ${String(error)}`);
+      }
+    }
+  }
+
+  private async requestTranscription(wav: Buffer, timeoutMs: number): Promise<string> {
     const form = new FormData();
     form.set("model", this.config.whisperModel);
     form.set("response_format", "json");
@@ -277,7 +318,7 @@ export class ConverseService extends EventEmitter<ServiceEvents> {
         method: "POST",
         headers: this.apiHeaders("transcription"),
         body: form,
-        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(this.config.apiTimeoutMs)]),
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutMs)]),
       });
       if (!response.ok) throw await this.requestError("transcription", response);
       const payload = (await response.json()) as { text?: string };

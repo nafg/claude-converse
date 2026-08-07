@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "./config.js";
-import { ConverseService } from "./service.js";
+import { computeSttTimeoutMs, ConverseService } from "./service.js";
 
 type ServiceInternals = {
   transcribe(audio: Buffer): Promise<string>;
@@ -671,5 +671,94 @@ describe("ConverseService lifecycle", () => {
       await concrete.stop();
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("ConverseService STT reliability", () => {
+  const sttReliabilityConfig = () => ({
+    ...whisperCppConfig(),
+    sampleRate: 16000,
+    channels: 1,
+    bytesPerSample: 2,
+    frameDurationMs: 30,
+    vadMinUtteranceFrames: 10,
+    apiTimeoutMs: 60_000,
+    sttTimeoutPerAudioSecondMs: 4_000,
+    sttTimeoutCapMs: 180_000,
+    sttEmptyTextRetries: 1,
+    sttErrorRetries: 1,
+  });
+
+  const diagnosticService = () => {
+    const concrete = new ConverseService(sttReliabilityConfig(), "test-owner");
+    const diagnostics: string[] = [];
+    concrete.on("diagnostic", (message) => diagnostics.push(message));
+    return { service: concrete as unknown as ServiceInternals, diagnostics };
+  };
+
+  const oneSecondOfAudio = () => Buffer.alloc(32_000);
+
+  it("scales the transcription timeout with audio length between floor and cap", () => {
+    const config = sttReliabilityConfig();
+    expect(computeSttTimeoutMs(Buffer.alloc(960).length, config)).toBe(60_000);
+    expect(computeSttTimeoutMs(20 * 32_000, config)).toBe(80_000);
+    expect(computeSttTimeoutMs(120 * 32_000, config)).toBe(180_000);
+  });
+
+  it("logs and retries an empty 200 response for a long-enough utterance", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ text: "" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { service, diagnostics } = diagnosticService();
+
+    await expect(service.transcribe(oneSecondOfAudio())).resolves.toBe("");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(diagnostics.filter((line) => line.includes("empty text from 200 response"))).toHaveLength(2);
+  });
+
+  it("does not retry an empty result for a short segment", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ text: "" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { service } = diagnosticService();
+
+    await expect(service.transcribe(Buffer.alloc(960))).resolves.toBe("");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a failed transcription request once and logs the failure", async () => {
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValue(new Response(JSON.stringify({ text: "hello" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { service, diagnostics } = diagnosticService();
+
+    await expect(service.transcribe(oneSecondOfAudio())).resolves.toBe("hello");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(diagnostics.filter((line) => line.includes("transcription request failed"))).toHaveLength(1);
+  });
+
+  it("does not retry an aborted transcription request", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new DOMException("aborted", "AbortError"));
+    vi.stubGlobal("fetch", fetchMock);
+    const { service } = diagnosticService();
+
+    await expect(service.transcribe(oneSecondOfAudio())).rejects.toThrow("aborted");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits a diagnostic when a final emission is dropped for empty text", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ text: "" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const concrete = new ConverseService({ ...sttReliabilityConfig(), sttEmptyTextRetries: 0 }, "test-owner");
+    const diagnostics: string[] = [];
+    concrete.on("diagnostic", (message) => diagnostics.push(message));
+    const service = concrete as unknown as LifecycleInternals;
+
+    await service.handleVadEmission({ type: "final", utteranceId: 7, audio: oneSecondOfAudio() }, service.lifecycleGeneration);
+
+    expect(diagnostics.some((line) => line.includes("transcription.dropped id=7 final=true"))).toBe(true);
   });
 });

@@ -38,6 +38,7 @@ service.on("final-transcript", (entry) => {
   }
 });
 service.on("error", (error) => console.error(error));
+service.on("diagnostic", (message) => console.error(message));
 
 const server = http.createServer(async (request, response) => {
   try {
