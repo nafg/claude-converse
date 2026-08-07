@@ -374,6 +374,35 @@ describe("loadConfig", () => {
       }
     `);
     expect(() => loadConfig(keyed)).toThrow(/ttsApiKey.*unsupported.*official server/i);
+
+    const modeled = writeConf(`
+      tts {
+        provider = "pocket-tts"
+        pocket-tts {
+          model = "pocket-tts-large"
+        }
+      }
+    `);
+    expect(() => loadConfig(modeled)).toThrow(/kokoroModel.*unsupported.*no model field/i);
+
+    const sped = writeConf(`
+      tts {
+        provider = "pocket-tts"
+        pocket-tts {
+          speed = 1.5
+        }
+      }
+    `);
+    expect(() => loadConfig(sped)).toThrow(/ttsSpeed.*unsupported.*no speed field/i);
+
+    const sectionLevel = writeConf(`
+      tts {
+        provider = "pocket-tts"
+        speed = 1.5
+      }
+    `);
+    expect(() => loadConfig(sectionLevel)).toThrow(/ttsSpeed.*unsupported.*no speed field/i);
+    expect(loadConfig(defaults).ttsSpeed).toBe(1.25);
   });
 
   it("selects whisper.cpp with local defaults and never sends a key", () => {

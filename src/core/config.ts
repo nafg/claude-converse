@@ -494,6 +494,12 @@ export const loadConfig = (path?: string): ConverseConfig => {
   if (ttsProvider === "pocket-tts" && tts.ttsApiKey !== undefined) {
     throw new Error("ttsApiKey is unsupported when ttsProvider is pocket-tts; the official server has no authentication");
   }
+  if (ttsProvider === "pocket-tts" && tts.kokoroModel !== undefined) {
+    throw new Error("kokoroModel is unsupported when ttsProvider is pocket-tts; the official /tts API has no model field");
+  }
+  if (ttsProvider === "pocket-tts" && tts.ttsSpeed !== undefined) {
+    throw new Error("ttsSpeed is unsupported when ttsProvider is pocket-tts; the official /tts API has no speed field");
+  }
   if (apiTimeoutMs <= 0) throw new Error("apiTimeoutMs must be a positive number");
   if (ttsSpeed < 0.25 || ttsSpeed > 4) throw new Error("ttsSpeed must be between 0.25 and 4");
   if (ttsProvider === "speaches-kokoro" && (ttsSpeed < 0.5 || ttsSpeed > 2)) {
